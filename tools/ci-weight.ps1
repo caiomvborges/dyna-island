@@ -2,7 +2,7 @@
 # from outside the process and compared with tools/weight-budget.json
 # (AGENTS.md, Keep it light). tools/ci-smoke.ps1 runs it after its own checks.
 #
-# At rest: Poni idle in a home of its own (default settings), once start-up
+# At rest: Dyna Island idle in a home of its own (default settings), once start-up
 # work is done. Music: a stand-in player (tools/ci-fake-music.ps1) says a
 # song is playing, so the closed island shows the music pill and its
 # equalizer.
@@ -10,7 +10,7 @@
 # CPU is counted in processor cycles (QueryProcessCycleTime), which is exact:
 # Task Manager and TotalProcessorTime count in 15.6 ms ticks and read 0 for
 # work that takes a fraction of a millisecond. Wake-ups are the context
-# switches of all Poni's threads, from the kernel's process list: each one is
+# switches of all Dyna Island's threads, from the kernel's process list: each one is
 # a thread that woke up. The table goes into the run's summary. A number over
 # budget is a warning until "warn_only_until" in the budget file, then it
 # fails the run.
@@ -51,7 +51,7 @@ public static class Weigh {
     // empty if it isn't running. SystemProcessInformation (5), x64: each
     // process entry is 0x100 bytes (its id at 0x50), then one 0x50-byte entry
     // per thread (its id at 0x30, context switches at 0x40); the same layout
-    // poni_core::sysmon reads.
+    // dyna_core::sysmon reads.
     public static Dictionary<long, long> Switches(int pid) {
         var found = new Dictionary<long, long>();
         int length = 1 << 20;
@@ -155,17 +155,17 @@ function WaitFor([string]$file, [string]$pattern, [int]$seconds) {
 
 $result = [ordered]@{ exe_mb = [Math]::Round((Get-Item $Exe).Length / 1e6, 2); cpu_mhz = $mhz }
 
-# Only one island runs at a time: a Poni still on its way out (the smoke
+# Only one island runs at a time: a Dyna Island still on its way out (the smoke
 # run's) would make this one quit at once.
-Get-Process -Name poni -ErrorAction SilentlyContinue | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
-if (Get-Process -Name poni -ErrorAction SilentlyContinue) { throw "another poni.exe is still running" }
+Get-Process -Name dyna-island -ErrorAction SilentlyContinue | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
+if (Get-Process -Name dyna-island -ErrorAction SilentlyContinue) { throw "another dyna-island.exe is still running" }
 
 # A home of its own: default settings, nothing cached.
-$env:PONI_HOME = (New-Item -ItemType Directory -Force -Path (Join-Path $Out "home")).FullName
-$log = Join-Path $env:PONI_HOME "cache\poni.log"
+$env:DYNA_HOME = (New-Item -ItemType Directory -Force -Path (Join-Path $Out "home")).FullName
+$log = Join-Path $env:DYNA_HOME "cache\dyna-island.log"
 $p = Start-Process -FilePath $Exe -PassThru
 try {
-    if (-not (WaitFor $log "renderer:" 30)) { Write-Host "::warning title=Weight check::Poni logged no renderer line within 30 s" }
+    if (-not (WaitFor $log "renderer:" 30)) { Write-Host "::warning title=Weight check::Dyna Island logged no renderer line within 30 s" }
     # Start-up work (tray, services, the first readings) settles first.
     Start-Sleep -Seconds 8
     $result.rest = Read-Weight $p $Seconds
@@ -181,7 +181,7 @@ try {
             Start-Sleep -Seconds 3
             $result.music = Read-Weight $p $Seconds
         } else {
-            Write-Host "::warning title=Weight check::the stand-in player's session never reached Poni (player: $said)"
+            Write-Host "::warning title=Weight check::the stand-in player's session never reached Dyna Island (player: $said)"
             $result.music = $null
         }
         $result.music_player = $said
@@ -192,12 +192,12 @@ try {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
 }
-Copy-Item -Path $log -Destination (Join-Path $Out "poni.log") -ErrorAction SilentlyContinue
+Copy-Item -Path $log -Destination (Join-Path $Out "dyna-island.log") -ErrorAction SilentlyContinue
 
 # Compare with the budget.
 $b = Get-Content $Budget -Raw | ConvertFrom-Json
 $rows = @(
-    @{ label = "poni.exe"; value = $result.exe_mb; budget = $b.exe_mb; unit = "MB" },
+    @{ label = "dyna-island.exe"; value = $result.exe_mb; budget = $b.exe_mb; unit = "MB" },
     @{ label = "At rest: memory (private)"; value = $result.rest.private_mib; budget = $b.rest.private_mib; unit = "MiB" },
     @{ label = "At rest: in RAM (working set)"; value = $result.rest.working_set_mib; budget = $b.rest.working_set_mib; unit = "MiB" },
     @{ label = "At rest: CPU"; value = $result.rest.mcycles_per_s; budget = $b.rest.mcycles_per_s; unit = "M cycles/s"; note = "≈ $($result.rest.cpu_ms_per_s) ms/s" },
@@ -213,7 +213,7 @@ if ($result.music) {
 }
 
 $over = @()
-$lines = @("### Weight check (Windows, $(if ($env:PONI_RENDERER) { $env:PONI_RENDERER } else { 'GPU' }) renderer)", "", "| | Measured | Budget | |", "|---|---|---|---|")
+$lines = @("### Weight check (Windows, $(if ($env:DYNA_RENDERER) { $env:DYNA_RENDERER } else { 'GPU' }) renderer)", "", "| | Measured | Budget | |", "|---|---|---|---|")
 foreach ($r in $rows) {
     $v = if ($null -eq $r.value) { "n/a" } else { "$($r.value) $($r.unit)".Trim() }
     if ($r.note) { $v = "$v ($($r.note))" }

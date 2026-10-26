@@ -42,7 +42,7 @@ Precisa do Rust (stable) e de um toolchain para Windows (MSVC, ou MinGW-w64 com 
 
 ```
 cargo test --workspace
-cargo build -p poni --release        # target\release\poni.exe
+cargo build -p dyna-island --release        # target\release\dyna-island.exe
 ```
 
 Só uma cópia roda por vez: feche a anterior (ícone na bandeja → **Quit Dyna Island**) antes de abrir ou recompilar.
@@ -50,25 +50,27 @@ Só uma cópia roda por vez: feche a anterior (ícone na bandeja → **Quit Dyna
 Para testar sem misturar com suas configurações, use uma pasta separada:
 
 ```
-set PONI_HOME=C:\caminho\teste
-target\release\poni.exe
+set DYNA_HOME=C:\caminho\teste
+target\release\dyna-island.exe
 ```
 
 ### Teste automático
 
-`poni.exe --selftest <pasta>` passa por todos os estados com dados falsos, salva uma captura de cada um e escreve `report.json` com as checagens. Código de saída diferente de zero indica falha.
+`dyna-island.exe --selftest <pasta>` passa por todos os estados com dados falsos, salva uma captura de cada um e escreve `report.json` com as checagens. Código de saída diferente de zero indica falha.
 
 | Variável | Efeito |
 |---|---|
-| `PONI_SELFTEST_THEME=light\|glass\|pill` | Roda todas as cenas nesse tema |
-| `PONI_SELFTEST_DPI=144` | Renderiza em 150% (também 120 e 192) |
-| `PONI_RENDERER=software` | Desenha em software em vez da GPU |
+| `DYNA_SELFTEST_THEME=light\|glass\|pill` | Roda todas as cenas nesse tema |
+| `DYNA_SELFTEST_DPI=144` | Renderiza em 150% (também 120 e 192) |
+| `DYNA_RENDERER=software` | Desenha em software em vez da GPU |
 
 ## Onde ficam os dados
 
-- Configurações: `%APPDATA%\Poni\settings.json`
-- Tarefas, notas, Dock, foco e roteiro: `%APPDATA%\Poni\data.json`
-- Log: `%LOCALAPPDATA%\Poni\poni.log`
+- Configurações: `%APPDATA%\DynaIsland\settings.json`
+- Tarefas, notas, Dock, foco e roteiro: `%APPDATA%\DynaIsland\data.json`
+- Log: `%LOCALAPPDATA%\DynaIsland\dyna-island.log`
+
+Quem usava uma versão anterior (que guardava tudo em pastas `Poni`) não perde nada: na primeira vez que abre, o Dyna Island move essas pastas para as novas e passa o "iniciar com o Windows" para o novo executável.
 
 ## Créditos
 
@@ -77,7 +79,7 @@ O Dyna Island nasceu do **[Oyenza Studio](https://github.com/lucacadalora/oyenza
 O que mudou em relação ao original:
 
 - **Saiu:** Shelf e envio de arquivos pelo celular, Oyenza (dinheiro), Health, Prayer times, letras sincronizadas (LRCLIB e Apple Music), download de add-ons e o dicionário japonês, o gravador de tela, o app para Mac, o site e a publicação na loja.
-- **Saiu a marca:** o nome Oyenza Studio, o logo e o gato Oyen não fazem parte deste projeto. O tema Oyen virou o tema **Light**: creme e azul, com a onda no lugar do personagem (`crates/poni/src/wave.rs`). O ícone e as imagens do instalador foram redesenhados (`tools/make_icon.py`).
+- **Saiu a marca:** o nome Oyenza Studio, o logo e o gato Oyen não fazem parte deste projeto. O tema Oyen virou o tema **Light**: creme e azul, com a onda no lugar do personagem (`crates/dyna-island/src/wave.rs`). O ícone e as imagens do instalador foram redesenhados (`tools/make_icon.py`).
 - **Entrou:** as abas Dock, Notes e Agenda (link ICS do Outlook.com), o sino que avisa quando um processo termina e o atalho para o app que está tocando.
 
 Este projeto não é afiliado ao Oyenza Studio nem à Jatevo Labs.

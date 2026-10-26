@@ -5,7 +5,7 @@ cream dot (the album art) and three cream bars (the equalizer). The installer
 pictures put the island, in blue, on the Light theme's cream ground.
 
 Writes:
-  crates/poni/res/poni.ico            16 to 256 px
+  crates/dyna-island/res/dyna-island.ico            16 to 256 px
   installer/art/wizard-*.png          Inno Setup's wizard pictures
   installer/art/nsis-*.bmp            NSIS's welcome and header pictures
 
@@ -17,11 +17,11 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
-RES = ROOT / "crates" / "poni" / "res"
+RES = ROOT / "crates" / "dyna-island" / "res"
 ART = ROOT / "installer" / "art"
 
 ISLAND = (0x08, 0x08, 0x0A)
-BLUE = (0x2E, 0x64, 0xA6)  # poni_core::look::LIGHT_ACCENT
+BLUE = (0x2E, 0x64, 0xA6)  # dyna_core::look::LIGHT_ACCENT
 CREAM = (0xFB, 0xF4, 0xE9)  # the Light theme's ground
 SS = 4  # supersampling
 
@@ -73,7 +73,7 @@ def header(w: int, h: int) -> Image.Image:
 def main() -> None:
     sizes = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
     big = icon(256)
-    big.save(RES / "poni.ico", sizes=[(n, n) for n in sizes], append_images=[icon(n) for n in sizes if n != 256])
+    big.save(RES / "dyna-island.ico", sizes=[(n, n) for n in sizes], append_images=[icon(n) for n in sizes if n != 256])
     ART.mkdir(parents=True, exist_ok=True)
     for n in (58, 77, 97, 116, 124, 143, 159):
         bg = Image.new("RGB", (n, n), (255, 255, 255))
@@ -84,7 +84,7 @@ def main() -> None:
         picture(w, h).save(ART / f"wizard-{w}x{h}.png", optimize=True)
     picture(164, 314).save(ART / "nsis-welcome.bmp")
     header(150, 57).save(ART / "nsis-header.bmp")
-    for p in sorted([RES / "poni.ico", *ART.iterdir()]):
+    for p in sorted([RES / "dyna-island.ico", *ART.iterdir()]):
         print(f"{p.relative_to(ROOT)}: {p.stat().st_size} bytes")
 
 

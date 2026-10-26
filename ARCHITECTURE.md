@@ -9,7 +9,7 @@ Script (an add-on) and Add-ons, with Settings behind the gear.
 
 **One network connection, and only when asked for.** The Outlook agenda
 add-on reads the ICS link the person pasted (`services::agenda`, WinHTTP):
-`https` on Outlook's own calendar hosts only (`poni_core::ics::check_link`),
+`https` on Outlook's own calendar hosts only (`dyna_core::ics::check_link`),
 redirects off, nothing sent but the request, the link never logged beyond
 its host. Nothing else talks to the network: the System page reads the PC's
 address from Windows' own address table, nothing downloads, and there is no
@@ -18,16 +18,22 @@ local: the settings file, the data folder, Windows' startup settings and the
 apps on the Dock.
 
 It started as a fork of Oyenza Studio (MIT; see the README's credits), which
-was called Poni inside. The code keeps that short name where people don't see it: the crates (`poni`, `poni-core`),
-`poni.exe`, its folders (`%LOCALAPPDATA%\Programs\Poni`, `%APPDATA%\Poni`), the
-uninstall key and Run value, `Local\Poni.Island` and the `PONI_*` variables.
+was called Poni inside. Every name now says Dyna Island: the crates
+(`dyna-island`, `dyna-core`), `dyna-island.exe`, its folders
+(`%LOCALAPPDATA%\Programs\DynaIsland`, `%APPDATA%\DynaIsland`,
+`%LOCALAPPDATA%\DynaIsland`), the uninstall key and the Run value
+(`DynaIsland`), `Local\DynaIsland.Island` and the `DYNA_*` variables. On its
+first start a copy moves the old `Poni` folders over and swaps the old `Poni`
+Run value for its own (`paths::migrate_from_poni`,
+`autostart::migrate_from_poni`), and it won't start while a copy from before
+the rename still runs.
 
 ## Crates
 
 | Crate | What | Builds on |
 |---|---|---|
-| `crates/poni-core` | Pure logic + models, no OS calls beyond `std` file I/O (`store`): geometry and colour (`geom`, `look`, `glass`, `hdr`), springs and frame timing (`spring`, `frametime`, `timeline`), player metadata fix-ups and transport rules (`nowplaying`), Pomodoro (`pomodoro`), tasks (`todo`), quick notes (`notes`), the Outlook agenda's meetings and countdown (`agenda`, in local wall-clock seconds) and the calendar file it reads (`ics`: folded lines, `VTIMEZONE` rules, all-day events, `RRULE` daily to yearly with `BYDAY`/`BYMONTHDAY`/`BYSETPOS`, `EXDATE`, changed and cancelled occurrences; and the link check), clipboard history (`cliphist`), the Dock's apps (`dock`), the Script reader (`script`), add-ons (`addons`: built-in only, what the Add-ons page says), settings and the JSON store (`settings`, `store`), dates (`datetime`), the SVG path parser (`svgpath`), the System page's arithmetic (`sysmon`: CPU load, per-app usage from two process lists, the process list's binary layout, a minute of history, number formats), frame rates over games (`frames`), and the whole PC's power (`power`: the Corsair HXi/RMi and MSI Ai power supplies' USB protocols, and the estimate when a PSU doesn't report) | any OS (`cargo test -p poni-core`) |
-| `crates/poni` | The app (Win32 + Direct2D + WinRT via `windows` 0.58) | Windows only (`cargo wcheck` / `cargo wbuild` cross from Linux) |
+| `crates/dyna-core` | Pure logic + models, no OS calls beyond `std` file I/O (`store`): geometry and colour (`geom`, `look`, `glass`, `hdr`), springs and frame timing (`spring`, `frametime`, `timeline`), player metadata fix-ups and transport rules (`nowplaying`), Pomodoro (`pomodoro`), tasks (`todo`), quick notes (`notes`), the Outlook agenda's meetings and countdown (`agenda`, in local wall-clock seconds) and the calendar file it reads (`ics`: folded lines, `VTIMEZONE` rules, all-day events, `RRULE` daily to yearly with `BYDAY`/`BYMONTHDAY`/`BYSETPOS`, `EXDATE`, changed and cancelled occurrences; and the link check), clipboard history (`cliphist`), the Dock's apps (`dock`), the Script reader (`script`), add-ons (`addons`: built-in only, what the Add-ons page says), settings and the JSON store (`settings`, `store`), dates (`datetime`), the SVG path parser (`svgpath`), the System page's arithmetic (`sysmon`: CPU load, per-app usage from two process lists, the process list's binary layout, a minute of history, number formats), frame rates over games (`frames`), and the whole PC's power (`power`: the Corsair HXi/RMi and MSI Ai power supplies' USB protocols, and the estimate when a PSU doesn't report) | any OS (`cargo test -p dyna-core`) |
+| `crates/dyna-island` | The app (Win32 + Direct2D + WinRT via `windows` 0.58) | Windows only (`cargo wcheck` / `cargo wbuild` cross from Linux) |
 
 ## Threads and data flow
 
@@ -57,7 +63,7 @@ uninstall key and Run value, `Local\Poni.Island` and the `PONI_*` variables.
     0 elsewhere), refreshed at ~30 Hz while the island moves and exactly at
     rest, so transparent pixels stay click-through.
   * Software renderer (fallback: no DirectComposition, e.g. Wine; repeated
-    device loss; `PONI_RENDERER=software`): Direct2D in software into a DIB
+    device loss; `DYNA_RENDERER=software`): Direct2D in software into a DIB
     pushed with `UpdateLayeredWindowIndirect`, copying only the rectangle the
     island covered this frame and last.
   * Content that fades in or out during a morph is drawn into an offscreen
@@ -71,7 +77,7 @@ uninstall key and Run value, `Local\Poni.Island` and the `PONI_*` variables.
 * **Frame clock**: `window.rs`. A thread waits on the island display's vblank
   (`IDXGIOutput::WaitForVBlank`; DwmFlush or a steady timer as fallbacks) and
   posts `WM_APP_FRAME`. Timestamps are phase-locked to the display
-  (`poni_core::frametime`), and each frame is stamped with the vblank it will
+  (`dyna_core::frametime`), and each frame is stamped with the vblank it will
   be shown on, so every animation step is a whole number of refresh periods
   (smooth at 60, 144 or 240 Hz).
 * **Idle = no frames**: frames are produced only while the island animates,
@@ -82,7 +88,7 @@ uninstall key and Run value, `Local\Poni.Island` and the `PONI_*` variables.
   visible change (countdown second, HUD expiry, minute tick). The one thing
   that reads at rest is the System page's kept minute (`system_history`, on
   by default): a light reading a second. It rests while the session is locked
-  or the display is off, and on battery saver (`poni_core::sysmon::reads`).
+  or the display is off, and on battery saver (`dyna_core::sysmon::reads`).
   See "Keep it light" in AGENTS.md.
 * **Window**: `WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`.
   It never takes focus on click; text fields temporarily drop NOACTIVATE
@@ -102,7 +108,7 @@ uninstall key and Run value, `Local\Poni.Island` and the `PONI_*` variables.
 
 ## Contracts
 
-### Pages (`crates/poni/src/pages/*.rs`)
+### Pages (`crates/dyna-island/src/pages/*.rs`)
 
 ```rust
 pub fn height(st: &AppState) -> f32;                      // content height in DIPs
@@ -124,7 +130,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
   `icon(Icon, rect, color)`, `clip/unclip`, `with_alpha`.
 * Text: `TextStyle::new(size).weight(Weight::Semibold).color(c).center()/.right().tabular().wrap().top()`.
   Single-line text is ellipsized automatically.
-* Colours: `poni_core::geom::palette` (island is pure black; text is white at
+* Colours: `dyna_core::geom::palette` (island is pure black; text is white at
   0.96 / 0.62 / 0.50, disabled 0.30; accents GREEN, ORANGE, RED, BLUE, CYAN,
   PURPLE, YELLOW).
 * Type scale: `gfx::ts` (11 / 12 / 13 / 15 / 18 / 30 / 50) via `TextStyle::caption()`,
@@ -138,13 +144,13 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
   changes: settings through `Command::SaveSettings` (applied as a tray change is),
   Start with Windows through `Command::SetAutostart` (read and set off the UI thread).
 * Add-ons (`pages/addons.rs`) is the last tab, a "+": one row per add-on in
-  `poni_core::addons::ALL` (the Script reader and the Outlook agenda) with a switch. Switching
+  `dyna_core::addons::ALL` (the Script reader and the Outlook agenda) with a switch. Switching
   flips `settings.addons` through `Command::SaveSettings`; `App::settings_changed`
   sets `st.addons`. Add-ons are built in: nothing downloads.
 * Script (`pages/script.rs`) is a tab only while its add-on is on
   (`AppState::script_on`). A `.txt` dropped on the island (`dragdrop.rs`,
   `AppEvent::FilesDropped`) becomes the script while that page shows.
-* Notes (`pages/notes.rs`): `store.notes` (`poni_core::notes`), newest first.
+* Notes (`pages/notes.rs`): `store.notes` (`dyna_core::notes`), newest first.
   Enter adds (`text_input_row`), a click copies (`Command::CopyText`, kept out
   of the clipboard history), × deletes with Undo; `next_wake` covers the
   "Copied" flash and the Undo lapsing.
@@ -163,7 +169,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
   the page opens. Offline, the meetings last read stay. `Activity::Meeting` takes the closed
   island from `agenda::LEAD_S` before the next meeting to `NOW_S` after it
   starts (`AppState::meeting_countdown`), ahead of music and the timer.
-* Dock (`pages/dock.rs`): tiles for `store.dock` (`poni_core::dock`, up to
+* Dock (`pages/dock.rs`): tiles for `store.dock` (`dyna_core::dock`, up to
   `MAX_APPS`). A click sends `Command::LaunchApp` (`shell::open`, the same as a
   double-click: a shortcut keeps its arguments) and collapses the island; the
   × on a hovered tile takes the app off; Add sends `Command::PickDockApp`, which
@@ -179,7 +185,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
   `st.chime()`, `st.notify(...)`). Never call services from pages.
 * Transient page state lives in `st.ui` (`PageUiState`).
 
-### Services (`crates/poni/src/services/*.rs`)
+### Services (`crates/dyna-island/src/services/*.rs`)
 
 * `start(sink: EventSink) -> windows::core::Result<Self>`; failures are logged
   and the feature is skipped. Never panic, never block the UI thread.
@@ -204,19 +210,19 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
 | `gfx.rs`, `glass.rs`, `icons.rs`, `ui.rs`, `island.rs`, `window.rs`, `png.rs` | rendering/UI foundation |
 | `state.rs`, `events.rs`, `commands.rs` | shared contracts |
 | `pages/*.rs` | expanded pages: `media` (Music), `focus`, `tasks`, `notes`, `clipboard`, `today`, `system`, `agenda`, `dock`, `script`, `addons`, `settings` |
-| `services/*.rs` | watch (the System page's bell: waits for a process to end), agenda (the agenda add-on: a WinHTTP GET of the pasted link, the parsed meetings moved to the PC's clock with `SystemTimeToTzSpecificLocalTime`), media (Windows' media controls; Apple Music's own progress slider and back button through UI Automation in `applemusic_ui`), audio, bluetooth, fullscreen (AppBar and top windows), clipboard, imaging (WIC decoding, shell thumbnails and app icons on one worker thread, for the System page and the Dock), backdrop (the Glass theme's screen copy), power, sound, sysstats (Today's vitals), sysmon (the System page's readings: each second while the page is open or a game's readout shows, a light reading a second for the kept minute while it's closed; all of it rests while nobody is at the PC, the kept minute also on battery saver; on a desktop with the page open it also loads NVML for an NVIDIA card's watts and reads a power supply that reports over USB), psu (that power supply over HID, read with requests only), frames (Show over games' frame count: a real-time event tracing session of the game's Present calls, only while the readout shows; the one-time OK is `poni.exe --allow-fps <SID>`, run elevated) |
+| `services/*.rs` | watch (the System page's bell: waits for a process to end), agenda (the agenda add-on: a WinHTTP GET of the pasted link, the parsed meetings moved to the PC's clock with `SystemTimeToTzSpecificLocalTime`), media (Windows' media controls; Apple Music's own progress slider and back button through UI Automation in `applemusic_ui`), audio, bluetooth, fullscreen (AppBar and top windows), clipboard, imaging (WIC decoding, shell thumbnails and app icons on one worker thread, for the System page and the Dock), backdrop (the Glass theme's screen copy), power, sound, sysstats (Today's vitals), sysmon (the System page's readings: each second while the page is open or a game's readout shows, a light reading a second for the kept minute while it's closed; all of it rests while nobody is at the PC, the kept minute also on battery saver; on a desktop with the page open it also loads NVML for an NVIDIA card's watts and reads a power supply that reports over USB), psu (that power supply over HID, read with requests only), frames (Show over games' frame count: a real-time event tracing session of the game's Present calls, only while the readout shows; the one-time OK is `dyna-island.exe --allow-fps <SID>`, run elevated) |
 | `dragdrop.rs`, `picker.rs`, `shell.rs`, `tray.rs`, `autostart.rs`, `activate.rs` | OS integration: drops onto the island, the Open dialog, opening files and apps (validated local paths only), the tray menu, Start with Windows, and bringing the playing app forward (the Music page's player name: a Store app through `IApplicationActivationManager`, a desktop app's main window, preferring the one titled with the song) |
 | `version.rs` | which build this is, for the tray's greyed About line |
-| `selftest.rs` | `poni.exe --selftest <dir>` scripted screenshots and checks |
+| `selftest.rs` | `dyna-island.exe --selftest <dir>` scripted screenshots and checks |
 
 ## Data
 
-* Settings: `%APPDATA%\Poni\settings.json` (created with defaults; tray → "Open settings file"), including the agenda's calendar link.
-* Data (tasks, notes, focus stats, the Script reader's script, the Dock's apps): `%APPDATA%\Poni\data.json`.
+* Settings: `%APPDATA%\DynaIsland\settings.json` (created with defaults; tray → "Open settings file"), including the agenda's calendar link.
+* Data (tasks, notes, focus stats, the Script reader's script, the Dock's apps): `%APPDATA%\DynaIsland\data.json`.
   The agenda's meetings are only held in memory.
   Drinks logged by an old Water page stay in it untouched (`water`).
-* Log: `%LOCALAPPDATA%\Poni\poni.log`.
-* `PONI_HOME` overrides both folders (the self-test uses it).
+* Log: `%LOCALAPPDATA%\DynaIsland\dyna-island.log`.
+* `DYNA_HOME` overrides both folders (the self-test uses it).
 * Clipboard history is memory-only and skips content marked
   `ExcludeClipboardContentFromMonitorProcessing` / `CanIncludeInClipboardHistory=0`
   (password managers set these).
@@ -225,13 +231,13 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
 
 ```
 cargo test --workspace           # logic and app tests
-cargo build -p poni --release    # on Windows: target\release\poni.exe
+cargo build -p dyna-island --release    # on Windows: target\release\dyna-island.exe
 cargo wcheck                     # type-check the app from Linux
-cargo wbuild                     # cross-build target/x86_64-pc-windows-gnu/release/poni.exe (needs mingw-w64)
+cargo wbuild                     # cross-build target/x86_64-pc-windows-gnu/release/dyna-island.exe (needs mingw-w64)
 python3 tools/make_notices.py    # rewrite THIRD-PARTY-NOTICES.txt after changing dependencies (--check compares)
 python3 tools/make_brand.py      # redraw the icon and the installer pictures (needs Pillow)
 ```
 
-Only one copy runs at a time (`Local\Poni.Island`): close the running one
-(tray → Quit) before replacing `poni.exe`. The installers are
-`installer/poni.nsi` (NSIS) and `installer/poni.iss` (Inno Setup).
+Only one copy runs at a time (`Local\DynaIsland.Island`): close the running one
+(tray → Quit) before replacing `dyna-island.exe`. The installers are
+`installer/dyna-island.nsi` (NSIS) and `installer/dyna-island.iss` (Inno Setup).

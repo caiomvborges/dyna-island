@@ -3,7 +3,7 @@
 
     python3 tools/selftest_diff.py <before> <after> [--noise <dir> ...]
 
-<before> and <after> are `poni.exe --selftest` folders (tools/run-selftest-wine.sh),
+<before> and <after> are `dyna-island.exe --selftest` folders (tools/run-selftest-wine.sh),
 usually the same theme and DPI from two builds. Every PNG in <before> is
 compared with the one of the same name in <after>, pixel by pixel with no
 tolerance. The script lists each picture that differs, how many pixels changed

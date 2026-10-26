@@ -1,0 +1,11 @@
+[package]
+name = "dyna-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Platform-independent models and logic for Dyna Island (pure Rust, unit-tested on any OS)."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

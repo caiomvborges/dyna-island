@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/poni-core", "crates/poni"]
+members = ["crates/dyna-core", "crates/dyna-island"]
 
 [workspace.package]
 version = "0.2.4"
@@ -19,6 +19,6 @@ codegen-units = 1
 strip = true
 
 # Libraries that run for moments and never in a frame, built for size instead
-# of speed (AGENTS.md, Keep it light): JSON. Poni's own code keeps opt-level 3.
+# of speed (AGENTS.md, Keep it light): JSON. Dyna Island's own code keeps opt-level 3.
 [profile.release.package.serde_json]
 opt-level = "s"

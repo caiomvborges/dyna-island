@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Keep in sync with Cargo.toml's workspace version, installer/poni.nsi and installer/poni.iss.
-  PONI_VERSION: "0.2.4"
+  # Keep in sync with Cargo.toml's workspace version, installer/dyna-island.nsi and installer/dyna-island.iss.
+  DYNA_VERSION: "0.2.4"
 
 jobs:
   core:
@@ -22,18 +22,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p poni-core
+      - run: cargo test -p dyna-core
       # THIRD-PARTY-NOTICES.txt ships with every build: it must list every
-      # crate poni.exe links (run the script after changing dependencies).
+      # crate dyna-island.exe links (run the script after changing dependencies).
       - name: Third-party notices up to date
         run: |
           cargo fetch --locked
           python3 tools/make_notices.py --check
 
-  # poni.exe is built once, here. The unit tests, the self-tests and the
+  # dyna-island.exe is built once, here. The unit tests, the self-tests and the
   # installer each run on their own machine, side by side.
   windows:
-    name: Build poni.exe (Windows)
+    name: Build dyna-island.exe (Windows)
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -41,13 +41,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release
-        run: cargo build -p poni --release
+        run: cargo build -p dyna-island --release
 
-      - name: Upload poni.exe
+      - name: Upload dyna-island.exe
         uses: actions/upload-artifact@v4
         with:
-          name: poni-exe
-          path: target/release/poni.exe
+          name: dyna-island-exe
+          path: target/release/dyna-island.exe
           if-no-files-found: error
 
   # The tests compile the app again, in test mode. They need the same
@@ -75,18 +75,18 @@ jobs:
           New-Item -ItemType Directory -Force fake-am | Out-Null
           & "$fw\csc.exe" /nologo /target:winexe /out:fake-am\AppleMusic.exe /r:"$fw\WPF\PresentationFramework.dll" /r:"$fw\WPF\PresentationCore.dll" /r:"$fw\WPF\WindowsBase.dll" /r:"$fw\System.Xaml.dll" tools\fake-apple-music.cs
           if ($LASTEXITCODE -ne 0) { throw "the stand-in didn't build" }
-          $env:PONI_FAKE_AM_LOG = "$PWD\fake-am\am.log"
-          $am = Start-Process -FilePath fake-am\AppleMusic.exe -ArgumentList "`"$env:PONI_FAKE_AM_LOG`"" -PassThru
+          $env:DYNA_FAKE_AM_LOG = "$PWD\fake-am\am.log"
+          $am = Start-Process -FilePath fake-am\AppleMusic.exe -ArgumentList "`"$env:DYNA_FAKE_AM_LOG`"" -PassThru
           try {
-            cargo test -p poni --release presses_apple_musics_own_controls -- --ignored --nocapture
+            cargo test -p dyna-island --release presses_apple_musics_own_controls -- --ignored --nocapture
             if ($LASTEXITCODE -ne 0) { throw "Apple Music controls test failed" }
           } finally {
             Stop-Process -Id $am.Id -Force -ErrorAction SilentlyContinue
-            Get-Content $env:PONI_FAKE_AM_LOG -ErrorAction SilentlyContinue
+            Get-Content $env:DYNA_FAKE_AM_LOG -ErrorAction SilentlyContinue
           }
 
   # The self-tests and smoke runs on three machines at once, from the
-  # poni.exe built above. Each step is the same as when one machine ran them
+  # dyna-island.exe built above. Each step is the same as when one machine ran them
   # all in a row; `group` says which machine runs it:
   #   classic: the scripted self-test, the Light self-test, the Pill smoke run
   #   glass:   the Glass self-tests, the Glass smoke run, the Pill self-test
@@ -107,25 +107,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: poni-exe
+          name: dyna-island-exe
           path: target/release
 
       # The runner is an admin, so Show over games' frame count runs on Light
-      # Poni's own frames here: Windows' frame log must deliver them.
+      # Dyna Island's own frames here: Windows' frame log must deliver them.
       - name: Self-test (scripted screenshots)
         if: matrix.group == 'classic'
         shell: pwsh
         env:
-          PONI_SELFTEST_FRAMES: required
+          DYNA_SELFTEST_FRAMES: required
         run: |
           # Park the cursor mid-screen so a hover can't change the scripted states.
           Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -Namespace PoniCi -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
+          Add-Type -Namespace DynaCi -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          [PoniCi.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
+          [DynaCi.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
 
           New-Item -ItemType Directory -Force -Path selftest-out | Out-Null
-          $p = Start-Process -FilePath target\release\poni.exe -ArgumentList "--selftest","selftest-out" -PassThru
+          $p = Start-Process -FilePath target\release\dyna-island.exe -ArgumentList "--selftest","selftest-out" -PassThru
           $null = $p.Handle  # keep the handle so ExitCode is available after exit
           if (-not $p.WaitForExit(120000)) {
             Stop-Process -Id $p.Id -Force
@@ -146,8 +146,8 @@ jobs:
           Get-ChildItem selftest-out -Filter *.png | ForEach-Object { "  $($_.Name)  $($_.Length) bytes" }
 
           if ($code -ne 0) {
-            "---- poni.log (tail)"
-            Get-Content selftest-out\home\cache\poni.log -Tail 80 -ErrorAction SilentlyContinue
+            "---- dyna-island.log (tail)"
+            Get-Content selftest-out\home\cache\dyna-island.log -Tail 80 -ErrorAction SilentlyContinue
             exit 1
           }
 
@@ -156,15 +156,15 @@ jobs:
         if: matrix.group == 'classic'
         shell: pwsh
         env:
-          PONI_SELFTEST_THEME: light
+          DYNA_SELFTEST_THEME: light
         run: |
           Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -Namespace PoniCiLight -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
+          Add-Type -Namespace DynaCiLight -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          [PoniCiLight.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
+          [DynaCiLight.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
 
           New-Item -ItemType Directory -Force -Path selftest-light | Out-Null
-          $p = Start-Process -FilePath target\release\poni.exe -ArgumentList "--selftest","selftest-light" -PassThru
+          $p = Start-Process -FilePath target\release\dyna-island.exe -ArgumentList "--selftest","selftest-light" -PassThru
           $null = $p.Handle
           if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; $code = -1 } else { $code = $p.ExitCode }
           "light self-test exit code: $code"
@@ -173,10 +173,10 @@ jobs:
             "renderer: $($r.renderer); states passed: $($r.states_passed)/$($r.states_total); failed: $($r.failed_checks -join ', ')"
             if ($r.slow_frames) { "::warning title=Slow frames on CI's software GPU (not counted)::$($r.slow_frames -join '; ')" }
           }
-          "---- fonts (poni.log)"
-          Select-String -Path selftest-light\home\cache\poni.log -Pattern 'fonts:' -ErrorAction SilentlyContinue | ForEach-Object { $_.Line }
+          "---- fonts (dyna-island.log)"
+          Select-String -Path selftest-light\home\cache\dyna-island.log -Pattern 'fonts:' -ErrorAction SilentlyContinue | ForEach-Object { $_.Line }
           if ($code -ne 0) {
-            Get-Content selftest-light\home\cache\poni.log -Tail 80 -ErrorAction SilentlyContinue
+            Get-Content selftest-light\home\cache\dyna-island.log -Tail 80 -ErrorAction SilentlyContinue
             exit 1
           }
 
@@ -189,17 +189,17 @@ jobs:
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -Namespace PoniCiGlass -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
+          Add-Type -Namespace DynaCiGlass -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          [PoniCiGlass.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
+          [DynaCiGlass.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
 
-          $env:PONI_SELFTEST_THEME = "glass"
+          $env:DYNA_SELFTEST_THEME = "glass"
           $failed = 0
           foreach ($run in "light", "dark", "flip") {
-            $env:PONI_SELFTEST_GLASS = $run
+            $env:DYNA_SELFTEST_GLASS = $run
             $dir = "selftest-glass-$run"
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
-            $p = Start-Process -FilePath target\release\poni.exe -ArgumentList "--selftest",$dir -PassThru
+            $p = Start-Process -FilePath target\release\dyna-island.exe -ArgumentList "--selftest",$dir -PassThru
             $null = $p.Handle
             if (-not $p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; $code = -1 } else { $code = $p.ExitCode }
             "glass ($run) self-test exit code: $code"
@@ -208,9 +208,9 @@ jobs:
               "renderer: $($r.renderer); states passed: $($r.states_passed)/$($r.states_total); failed: $($r.failed_checks -join ', ')"
               if ($r.slow_frames) { "::warning title=Slow Glass ($run) frames on CI's software GPU (not counted)::$($r.slow_frames -join '; ')" }
             }
-            Select-String -Path "$dir\home\cache\poni.log" -Pattern 'glass:' -ErrorAction SilentlyContinue | Select-Object -First 6 | ForEach-Object { $_.Line }
+            Select-String -Path "$dir\home\cache\dyna-island.log" -Pattern 'glass:' -ErrorAction SilentlyContinue | Select-Object -First 6 | ForEach-Object { $_.Line }
             if ($code -ne 0) {
-              Get-Content "$dir\home\cache\poni.log" -Tail 60 -ErrorAction SilentlyContinue
+              Get-Content "$dir\home\cache\dyna-island.log" -Tail 60 -ErrorAction SilentlyContinue
               $failed = 1
             }
           }
@@ -224,15 +224,15 @@ jobs:
         if: matrix.group == 'glass'
         shell: pwsh
         env:
-          PONI_SELFTEST_THEME: pill
+          DYNA_SELFTEST_THEME: pill
         run: |
           Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -Namespace PoniCiPill -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
+          Add-Type -Namespace DynaCiPill -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          [PoniCiPill.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
+          [DynaCiPill.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
 
           New-Item -ItemType Directory -Force -Path selftest-pill | Out-Null
-          $p = Start-Process -FilePath target\release\poni.exe -ArgumentList "--selftest","selftest-pill" -PassThru
+          $p = Start-Process -FilePath target\release\dyna-island.exe -ArgumentList "--selftest","selftest-pill" -PassThru
           $null = $p.Handle
           if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; $code = -1 } else { $code = $p.ExitCode }
           "pill self-test exit code: $code"
@@ -247,14 +247,14 @@ jobs:
             if ($pillChecks -eq 0) { "::error title=Pill self-test::no pill-gap check ran, so this was not a Pill run"; exit 1 }
           }
           if ($code -ne 0) {
-            Get-Content selftest-pill\home\cache\poni.log -Tail 80 -ErrorAction SilentlyContinue
+            Get-Content selftest-pill\home\cache\dyna-island.log -Tail 80 -ErrorAction SilentlyContinue
             exit 1
           }
 
       - name: Smoke run (real desktop, hover, idle CPU/RAM)
         if: matrix.group == 'smoke'
         shell: pwsh
-        run: ./tools/ci-smoke.ps1 -Exe target\release\poni.exe -Out smoke-out
+        run: ./tools/ci-smoke.ps1 -Exe target\release\dyna-island.exe -Out smoke-out
 
       # The Pill theme on a real desktop: the island floats below the top
       # edge, so the smoke run looks for it there, and the gap above it takes
@@ -263,14 +263,14 @@ jobs:
       - name: Smoke run, Pill theme
         if: matrix.group == 'classic'
         shell: pwsh
-        run: ./tools/ci-smoke.ps1 -Exe target\release\poni.exe -Out smoke-pill -Theme pill
+        run: ./tools/ci-smoke.ps1 -Exe target\release\dyna-island.exe -Out smoke-pill -Theme pill
 
       # Glass on a real desktop: with its screen copy running, screenshots
       # show what's under the island instead of the island.
       - name: Smoke run, Glass theme (left out of screenshots)
         if: matrix.group == 'glass'
         shell: pwsh
-        run: ./tools/ci-smoke-glass.ps1 -Exe target\release\poni.exe -Out smoke-glass
+        run: ./tools/ci-smoke-glass.ps1 -Exe target\release\dyna-island.exe -Out smoke-glass
 
       # The GPU renderer is the default (runners draw with WARP). The software
       # renderer is its fallback (no DirectComposition, device loss): test it too.
@@ -278,15 +278,15 @@ jobs:
         if: matrix.group == 'smoke'
         shell: pwsh
         env:
-          PONI_RENDERER: software
+          DYNA_RENDERER: software
         run: |
           Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -Namespace PoniCiSoft -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
+          Add-Type -Namespace DynaCiSoft -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          [PoniCiSoft.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
+          [DynaCiSoft.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
 
           New-Item -ItemType Directory -Force -Path selftest-soft | Out-Null
-          $p = Start-Process -FilePath target\release\poni.exe -ArgumentList "--selftest","selftest-soft" -PassThru
+          $p = Start-Process -FilePath target\release\dyna-island.exe -ArgumentList "--selftest","selftest-soft" -PassThru
           $null = $p.Handle
           if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; $code = -1 } else { $code = $p.ExitCode }
           "software self-test exit code: $code"
@@ -295,10 +295,10 @@ jobs:
             "renderer: $($r.renderer); states passed: $($r.states_passed)/$($r.states_total); failed: $($r.failed_checks -join ', ')"
           }
           if ($code -ne 0) {
-            Get-Content selftest-soft\home\cache\poni.log -Tail 80 -ErrorAction SilentlyContinue
+            Get-Content selftest-soft\home\cache\dyna-island.log -Tail 80 -ErrorAction SilentlyContinue
             exit 1
           }
-          ./tools/ci-smoke.ps1 -Exe target\release\poni.exe -Out smoke-soft
+          ./tools/ci-smoke.ps1 -Exe target\release\dyna-island.exe -Out smoke-soft
 
       - name: Build installer (Inno Setup)
         if: matrix.group == 'smoke'
@@ -312,15 +312,15 @@ jobs:
               Where-Object { Test-Path $_ } | Select-Object -First 1
           }
           if (-not $iscc) { Write-Error "ISCC.exe not found after installing Inno Setup"; exit 1 }
-          & $iscc "/DAppVersion=$env:PONI_VERSION" installer\poni.iss
+          & $iscc "/DAppVersion=$env:DYNA_VERSION" installer\dyna-island.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-Item "dist\Dyna-Island-Setup-$env:PONI_VERSION.exe" | Format-List Name, Length
+          Get-Item "dist\Dyna-Island-Setup-$env:DYNA_VERSION.exe" | Format-List Name, Length
 
       - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: poni-screens-${{ matrix.group }}
+          name: dyna-island-screens-${{ matrix.group }}
           path: |
             selftest-out
             selftest-light
@@ -339,11 +339,11 @@ jobs:
         if: matrix.group == 'smoke'
         uses: actions/upload-artifact@v4
         with:
-          name: poni-setup-inno
-          path: dist/Dyna-Island-Setup-${{ env.PONI_VERSION }}.exe
+          name: dyna-island-setup-inno
+          path: dist/Dyna-Island-Setup-${{ env.DYNA_VERSION }}.exe
           if-no-files-found: error
 
-  # The three machines' screenshots and logs as one poni-screens download,
+  # The three machines' screenshots and logs as one dyna-island-screens download,
   # the same as when one machine ran every self-test.
   screens:
     name: Screenshots and logs in one download
@@ -353,37 +353,37 @@ jobs:
     steps:
       - uses: actions/upload-artifact/merge@v4
         with:
-          name: poni-screens
-          pattern: poni-screens-*
+          name: dyna-island-screens
+          pattern: dyna-island-screens-*
           delete-merged: true
 
   installer:
     name: NSIS installer and portable zip
     needs: windows
-    # Pinned: 24.04's nsis 3.09 has the amd64-unicode stubs poni.nsi needs.
+    # Pinned: 24.04's nsis 3.09 has the amd64-unicode stubs dyna-island.nsi needs.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: poni-exe
+          name: dyna-island-exe
           path: dist
       - name: Build
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq nsis zip > /dev/null
-          makensis -V2 -DEXE="$PWD/dist/poni.exe" -DOUTDIR="$PWD/dist" installer/poni.nsi
+          makensis -V2 -DEXE="$PWD/dist/dyna-island.exe" -DOUTDIR="$PWD/dist" installer/dyna-island.nsi
           # Portable build inside its own folder, as tools/package.sh makes it.
-          ( cd dist && mkdir Poni && cp poni.exe ../THIRD-PARTY-NOTICES.txt Poni/ && zip -qr "Dyna-Island-$PONI_VERSION-portable.zip" Poni && rm -rf Poni )
+          ( cd dist && mkdir DynaIsland && cp dyna-island.exe ../THIRD-PARTY-NOTICES.txt DynaIsland/ && zip -qr "Dyna-Island-$DYNA_VERSION-portable.zip" Dyna Island && rm -rf DynaIsland )
           ls -la dist
       # The download against tools/weight-budget.json (the Windows job's smoke
       # run weighs memory, CPU and wake-ups).
       - name: Weight check, download size
-        run: tools/ci-weight-download.sh "dist/Dyna-Island-Setup-$PONI_VERSION.exe"
+        run: tools/ci-weight-download.sh "dist/Dyna-Island-Setup-$DYNA_VERSION.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: dyna-island-setup
           path: |
-            dist/Dyna-Island-Setup-${{ env.PONI_VERSION }}.exe
-            dist/Dyna-Island-${{ env.PONI_VERSION }}-portable.zip
+            dist/Dyna-Island-Setup-${{ env.DYNA_VERSION }}.exe
+            dist/Dyna-Island-${{ env.DYNA_VERSION }}-portable.zip
           if-no-files-found: error

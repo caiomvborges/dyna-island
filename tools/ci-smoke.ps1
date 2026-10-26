@@ -1,9 +1,9 @@
 # Smoke test on a real Windows desktop (used by CI):
-# start Poni normally, screenshot the top of the screen while idle, hover the
+# start Dyna Island normally, screenshot the top of the screen while idle, hover the
 # island to expand it, screenshot again, and record idle CPU / memory. Also
 # checks that the island is really on screen, that its transparent
 # surroundings stay click-through, and how smoothly it morphs (the "motion"
-# lines Poni logs for its first morphs).
+# lines Dyna Island logs for its first morphs).
 #
 # Step aside: with a maximized window (Notepad) in front, the resting island
 # gets out of the way: a click just below the top edge reaches the window,
@@ -88,17 +88,17 @@ $cx = [int]($bounds.Width / 2)
 $pill = $Theme -eq "pill"
 # Software renderer: a layered window takes the mouse wherever its pixels
 # aren't fully transparent. Pill draws no shadow there, so only the outline's
-# anti-aliased edge can take it (Poni ignores a pointer there).
-$soft = $env:PONI_RENDERER -eq "software"
+# anti-aliased edge can take it (Dyna Island ignores a pointer there).
+$soft = $env:DYNA_RENDERER -eq "software"
 
 # Park the cursor away from the island.
 [Native]::SetCursorPos($cx, [int]($bounds.Height / 2)) | Out-Null
 
 # A home of its own per run (the CI runs this once per renderer and theme).
-$env:PONI_HOME = Join-Path (Resolve-Path ".").Path "$(Split-Path $Out -Leaf)-home"
+$env:DYNA_HOME = Join-Path (Resolve-Path ".").Path "$(Split-Path $Out -Leaf)-home"
 if ($pill) {
-    New-Item -ItemType Directory -Force -Path $env:PONI_HOME | Out-Null
-    '{"theme":"pill"}' | Set-Content -Path (Join-Path $env:PONI_HOME "settings.json") -Encoding ascii
+    New-Item -ItemType Directory -Force -Path $env:DYNA_HOME | Out-Null
+    '{"theme":"pill"}' | Set-Content -Path (Join-Path $env:DYNA_HOME "settings.json") -Encoding ascii
     "theme: pill$(if ($soft) { ' (software renderer)' })" | Tee-Object -FilePath $metrics -Append
 }
 $p = Start-Process -FilePath $Exe -PassThru
@@ -111,11 +111,11 @@ if (-not $pill) {
     $c = PixelAt $cx 4
     Expect "island-visible" ($c.R -lt 40 -and $c.G -lt 40 -and $c.B -lt 40) "pixel ($cx, 4) = rgb($($c.R), $($c.G), $($c.B))"
     $on = ClassAt $cx 4
-    Expect "island-takes-mouse" ($on -eq "Poni.Island") "window at ($cx, 4) = '$on'"
+    Expect "island-takes-mouse" ($on -eq "DynaIsland.Island") "window at ($cx, 4) = '$on'"
     $beside = ClassAt ($cx + 220) 4
-    Expect "transparent-click-through" ($beside -ne "Poni.Island") "window at ($($cx + 220), 4) = '$beside'"
+    Expect "transparent-click-through" ($beside -ne "DynaIsland.Island") "window at ($($cx + 220), 4) = '$beside'"
     $below = ClassAt $cx 120
-    Expect "below-click-through" ($below -ne "Poni.Island") "window at ($cx, 120) = '$below'"
+    Expect "below-click-through" ($below -ne "DynaIsland.Island") "window at ($cx, 120) = '$below'"
 } else {
     # Pill geometry in pixels: the island floats 8 DIP below the top edge.
     $g = [System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero)
@@ -133,14 +133,14 @@ if (-not $pill) {
     $mid = $gap + (Px 16)
     # ... and the gap above it takes the mouse, up to the very top edge.
     $edge = @(0, 4, ($gap - 1)) | ForEach-Object { "$_=$(ClassAt $cx $_)" }
-    Expect "gap-takes-mouse" (($edge | Where-Object { $_ -notlike "*=Poni.Island" }).Count -eq 0) "windows at x $cx, y $($edge -join ', ')"
+    Expect "gap-takes-mouse" (($edge | Where-Object { $_ -notlike "*=DynaIsland.Island" }).Count -eq 0) "windows at x $cx, y $($edge -join ', ')"
     $on = ClassAt $cx $mid
-    Expect "island-takes-mouse" ($on -eq "Poni.Island") "window at ($cx, $mid) = '$on'"
+    Expect "island-takes-mouse" ($on -eq "DynaIsland.Island") "window at ($cx, $mid) = '$on'"
 
     # Where the gap stops taking the mouse along the top edge: the pill's ends.
     function EdgeAt([int]$y, [int]$dir, [int]$limit) {
         $x = $cx
-        while ([Math]::Abs($x - $cx) -lt $limit -and (ClassAt ($x + $dir) $y) -eq "Poni.Island") { $x += $dir }
+        while ([Math]::Abs($x - $cx) -lt $limit -and (ClassAt ($x + $dir) $y) -eq "DynaIsland.Island") { $x += $dir }
         $x
     }
     $limit = Px 500
@@ -164,17 +164,17 @@ if (-not $pill) {
         @(($bodyRight + (Px 30)), $mid), @(($left - (Px 30)), $mid),
         @($cx, (Px 120))
     ) | ForEach-Object { "($($_[0]), $($_[1]))=$(ClassAt $_[0] $_[1])" }
-    Expect "beside-below-click-through" (($at | Where-Object { $_ -like "*=Poni.Island" }).Count -eq 0) "windows at $($at -join ', ')"
+    Expect "beside-below-click-through" (($at | Where-Object { $_ -like "*=DynaIsland.Island" }).Count -eq 0) "windows at $($at -join ', ')"
     # On its shadow, just beside and just below the pill: through as well on
     # the GPU renderer (its hit mask leaves the shadow out).
     $bottom = $mid
-    while ($bottom - $mid -lt (Px 120) -and (ClassAt $cx ($bottom + 1)) -eq "Poni.Island") { $bottom += 1 }
+    while ($bottom - $mid -lt (Px 120) -and (ClassAt $cx ($bottom + 1)) -eq "DynaIsland.Island") { $bottom += 1 }
     $shadow = @(
         @(($right + (Px 3)), $mid), @(($left - (Px 3)), $mid), @($cx, ($bottom + (Px 3)))
     ) | ForEach-Object { "($($_[0]), $($_[1]))=$(ClassAt $_[0] $_[1])" }
     if (-not $soft) {
         Expect "pill-height" (($bottom - $gap) -ge (Px 20) -and ($bottom - $gap) -le (Px 60)) "the pill takes the mouse from y $gap to $bottom"
-        Expect "shadow-click-through" (($shadow | Where-Object { $_ -like "*=Poni.Island" }).Count -eq 0) "windows at $($shadow -join ', ')"
+        Expect "shadow-click-through" (($shadow | Where-Object { $_ -like "*=DynaIsland.Island" }).Count -eq 0) "windows at $($shadow -join ', ')"
     } else {
         "software renderer: the mouse is taken down to y $bottom; on the shadow: $($shadow -join ', ')" | Tee-Object -FilePath $metrics -Append
     }
@@ -185,7 +185,7 @@ if (-not $pill) {
     [Native]::SetCursorPos(($right + (Px 17)), 0) | Out-Null
     Start-Sleep -Milliseconds 1500
     $shut = ClassAt ($cx + 200) 100
-    Expect "beside-does-not-open" ($shut -ne "Poni.Island") "after resting at ($($right + (Px 17)), 0): window at ($($cx + 200), 100) = '$shut'"
+    Expect "beside-does-not-open" ($shut -ne "DynaIsland.Island") "after resting at ($($right + (Px 17)), 0): window at ($($cx + 200), 100) = '$shut'"
     [Native]::SetCursorPos($cx, [int]($bounds.Height / 2)) | Out-Null
     Start-Sleep -Milliseconds 500
 }
@@ -210,15 +210,15 @@ Shot "2-hover-expanded" 480
 $c = PixelAt ($cx + 200) 100
 Expect "expanded-visible" ($c.R -lt 40 -and $c.G -lt 40 -and $c.B -lt 40) "pixel ($($cx + 200), 100) = rgb($($c.R), $($c.G), $($c.B))"
 $panel = ClassAt ($cx + 200) 100
-Expect "expanded-takes-mouse" ($panel -eq "Poni.Island") "window at ($($cx + 200), 100) = '$panel'"
+Expect "expanded-takes-mouse" ($panel -eq "DynaIsland.Island") "window at ($($cx + 200), 100) = '$panel'"
 if ($pill) {
     # The open card takes the mouse with the gap above it and its margin
     # (the card is settings.expanded_width, 620 DIP, wide by default).
     $cardRight = $cx + (Px 310)
     $open = @(@(($cx + 200), 0), @(($cardRight + (Px 4)), 100)) | ForEach-Object { "($($_[0]), $($_[1]))=$(ClassAt $_[0] $_[1])" }
-    Expect "expanded-gap-and-margin" (($open | Where-Object { $_ -notlike "*=Poni.Island" }).Count -eq 0) "windows at $($open -join ', ')"
+    Expect "expanded-gap-and-margin" (($open | Where-Object { $_ -notlike "*=DynaIsland.Island" }).Count -eq 0) "windows at $($open -join ', ')"
     $past = ClassAt ($cardRight + (Px 40)) 100
-    Expect "expanded-past-margin-click-through" ($past -ne "Poni.Island") "window at ($($cardRight + (Px 40)), 100) = '$past'"
+    Expect "expanded-past-margin-click-through" ($past -ne "DynaIsland.Island") "window at ($($cardRight + (Px 40)), 100) = '$past'"
 }
 
 # Leave and let it collapse.
@@ -226,7 +226,7 @@ if ($pill) {
 Start-Sleep -Seconds 2
 Shot "3-collapsed-again"
 $after = ClassAt ($cx + 200) 100
-Expect "collapsed-click-through" ($after -ne "Poni.Island") "window at ($($cx + 200), 100) = '$after'"
+Expect "collapsed-click-through" ($after -ne "DynaIsland.Island") "window at ($($cx + 200), 100) = '$after'"
 
 # A few more open/close cycles for the motion log.
 for ($i = 0; $i -lt 3; $i++) {
@@ -257,16 +257,16 @@ try {
     # aside to (8 DIPs at the top edge).
     $tab = [int](20 * $dpi)
     $under = ClassAt $cx $tab
-    Expect "aside-window-takes-click" ($under -ne "Poni.Island" -and $under -ne "") "window at ($cx, $tab) = '$under'"
+    Expect "aside-window-takes-click" ($under -ne "DynaIsland.Island" -and $under -ne "") "window at ($cx, $tab) = '$under'"
     $strip = ClassAt $cx 1
-    Expect "aside-edge-takes-mouse" ($strip -eq "Poni.Island") "window at ($cx, 1) = '$strip'"
+    Expect "aside-edge-takes-mouse" ($strip -eq "DynaIsland.Island") "window at ($cx, 1) = '$strip'"
     # Pointing at the top edge still opens the island, over the window.
     [Native]::SetCursorPos($cx, $hoverY[0]) | Out-Null
     Start-Sleep -Milliseconds 120
     [Native]::SetCursorPos($cx, $hoverY[1]) | Out-Null
     Start-Sleep -Seconds 2
     $open = ClassAt ($cx + 200) 100
-    Expect "aside-opens-from-edge" ($open -eq "Poni.Island") "window at ($($cx + 200), 100) = '$open'"
+    Expect "aside-opens-from-edge" ($open -eq "DynaIsland.Island") "window at ($($cx + 200), 100) = '$open'"
     [Native]::SetCursorPos($cx, [int]($bounds.Height / 2)) | Out-Null
     Start-Sleep -Seconds 2
 } finally {
@@ -275,25 +275,25 @@ try {
 # The window gone, the island rests where it was.
 Start-Sleep -Seconds 2
 $back = ClassAt $cx $tab
-Expect "back-after-window" ($back -eq "Poni.Island") "window at ($cx, $tab) = '$back'"
+Expect "back-after-window" ($back -eq "DynaIsland.Island") "window at ($cx, $tab) = '$back'"
 
 $alive = -not $p.HasExited
 "still running: $alive" | Tee-Object -FilePath $metrics -Append
 if ($alive) { Stop-Process -Id $p.Id -Force; $p.WaitForExit(10000) | Out-Null }
 
-$log = Join-Path $env:PONI_HOME "cache\poni.log"
-Copy-Item -Path $log -Destination (Join-Path $Out "poni.log") -ErrorAction SilentlyContinue
+$log = Join-Path $env:DYNA_HOME "cache\dyna-island.log"
+Copy-Item -Path $log -Destination (Join-Path $Out "dyna-island.log") -ErrorAction SilentlyContinue
 if (Test-Path $log) {
-    "---- renderer and motion (from poni.log)" | Tee-Object -FilePath $metrics -Append
+    "---- renderer and motion (from dyna-island.log)" | Tee-Object -FilePath $metrics -Append
     Get-Content $log | Where-Object { $_ -match "renderer:|frame clock:|motion |GPU|island (floats|hangs)|step aside:" } | Tee-Object -FilePath $metrics -Append
 }
-if (-not $alive) { Write-Error "Poni exited during the smoke test"; exit 1 }
+if (-not $alive) { Write-Error "Dyna Island exited during the smoke test"; exit 1 }
 if ($failures.Count -gt 0) { Write-Error "smoke checks failed: $($failures -join ', ')"; exit 1 }
 
 # What it costs (size, memory, CPU, wake-ups, at rest and with music playing)
 # against tools/weight-budget.json, on the default renderer and theme only
-# (the weight run starts Poni in a home of its own, in Classic).
-if (-not $env:PONI_RENDERER -and -not $pill) {
+# (the weight run starts Dyna Island in a home of its own, in Classic).
+if (-not $env:DYNA_RENDERER -and -not $pill) {
     & (Join-Path $PSScriptRoot "ci-weight.ps1") -Exe $Exe -Out (Join-Path $Out "weight")
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
 }

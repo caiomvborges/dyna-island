@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the fonts Dyna Island ships (crates/poni/res/fonts) from Outfit.
+"""Build the fonts Dyna Island ships (crates/dyna-island/res/fonts) from Outfit.
 
 Outfit (SIL Open Font License 1.1, github.com/Outfitio/Outfit-Fonts) is the
 Dyna Island website's typeface; the Light theme writes every Latin letter in it.
@@ -11,7 +11,7 @@ Outfit's own letters and marks, so Chinese pronunciation lines don't fall
 back to another typeface mid-word.
 
 Usage:  python3 tools/make_fonts.py <Outfit[wght].ttf> [out-dir]
-        (out-dir defaults to crates/poni/res/fonts)
+        (out-dir defaults to crates/dyna-island/res/fonts)
 Needs:  fontTools (pip install fonttools)
 """
 
@@ -88,7 +88,7 @@ def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     src = sys.argv[1]
-    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), "..", "crates", "poni", "res", "fonts")
+    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), "..", "crates", "dyna-island", "res", "fonts")
     os.makedirs(out, exist_ok=True)
     for weight, style in WEIGHTS:
         vf = TTFont(src)

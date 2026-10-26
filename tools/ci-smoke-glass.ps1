@@ -3,7 +3,7 @@
 # Glass copies the screen under the island and leaves the island out of
 # screen capture. So with the copy running, a normal screenshot of the
 # island's spot must show what's under it (here: the desktop as it was before
-# Poni started), while the island still takes the mouse there. If this
+# Dyna Island started), while the island still takes the mouse there. If this
 # machine can't copy its screen, Glass draws smoked glass and stays in
 # screenshots: the log says why, and that is checked instead.
 param(
@@ -85,11 +85,11 @@ $cx = [int]($bounds.Width / 2)
 [GlassNative]::SetCursorPos($cx, [int]($bounds.Height / 2)) | Out-Null
 
 # A home of its own, with the Glass theme picked.
-$env:PONI_HOME = Join-Path (Resolve-Path ".").Path "$(Split-Path $Out -Leaf)-home"
-New-Item -ItemType Directory -Force -Path $env:PONI_HOME | Out-Null
-'{"theme":"glass"}' | Set-Content -Path (Join-Path $env:PONI_HOME "settings.json") -Encoding ascii
+$env:DYNA_HOME = Join-Path (Resolve-Path ".").Path "$(Split-Path $Out -Leaf)-home"
+New-Item -ItemType Directory -Force -Path $env:DYNA_HOME | Out-Null
+'{"theme":"glass"}' | Set-Content -Path (Join-Path $env:DYNA_HOME "settings.json") -Encoding ascii
 
-# The island's spot before Poni starts, then with Glass on.
+# The island's spot before Dyna Island starts, then with Glass on.
 $w = 200; $h = 26; $x = $cx - 100; $y = 2
 $before = Grab $x $y $w $h "0-before"
 $p = Start-Process -FilePath $Exe -PassThru
@@ -99,11 +99,11 @@ $diff = MeanDiff $before $after
 "difference at the island's spot: $([Math]::Round($diff, 2)) (0..255)" | Tee-Object -FilePath $metrics -Append
 
 $on = ClassAt $cx 4
-Expect "island-takes-mouse" ($on -eq "Poni.Island") "window at ($cx, 4) = '$on'"
+Expect "island-takes-mouse" ($on -eq "DynaIsland.Island") "window at ($cx, 4) = '$on'"
 
-$log = Join-Path $env:PONI_HOME "cache\poni.log"
+$log = Join-Path $env:DYNA_HOME "cache\dyna-island.log"
 $lines = if (Test-Path $log) { Get-Content $log } else { @() }
-"---- glass (from poni.log)" | Tee-Object -FilePath $metrics -Append
+"---- glass (from dyna-island.log)" | Tee-Object -FilePath $metrics -Append
 $lines | Where-Object { $_ -match 'glass:|renderer:' } | Select-Object -First 12 | Tee-Object -FilePath $metrics -Append
 $copyOn = [bool]($lines | Where-Object { $_ -match 'glass: screen copy on' })
 if ($copyOn) {
@@ -116,7 +116,7 @@ if ($copyOn) {
 $alive = -not $p.HasExited
 "still running: $alive" | Tee-Object -FilePath $metrics -Append
 if ($alive) { Stop-Process -Id $p.Id -Force }
-Copy-Item -Path $log -Destination (Join-Path $Out "poni.log") -ErrorAction SilentlyContinue
+Copy-Item -Path $log -Destination (Join-Path $Out "dyna-island.log") -ErrorAction SilentlyContinue
 if (-not $alive) { $failures += "still-running" }
 
 if ($failures.Count -gt 0) {

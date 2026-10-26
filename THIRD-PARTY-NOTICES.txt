@@ -4,7 +4,7 @@ Dyna Island's own code is under the MIT license (LICENSE). The parts below come
 from others and keep their own terms.
 
 ------------------------------------------------------------------------------
-Rust crates built into poni.exe
+Rust crates built into dyna-island.exe
 
 Written by tools/make_notices.py from Cargo.lock. Each of these crates offers the
 MIT license (some also Apache-2.0 or the Unlicense), and Dyna Island uses each one

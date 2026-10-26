@@ -12,11 +12,8 @@ pub enum Icon {
     Next,
     Prev,
     Music,
-    Lyrics,
     Timer,
     Coffee,
-    Steps,
-    Tray,
     ListChecks,
     Check,
     CheckCircle,
@@ -40,28 +37,11 @@ pub enum Icon {
     VolumeMute,
     Pin,
     PinFill,
-    Folder,
     File,
     Trash,
     Undo,
     Reset,
     Sliders,
-    Open,
-    Phone,
-    /// Oyenza: show a hidden sum.
-    Eye,
-    /// Oyenza: money that arrived.
-    MoneyIn,
-    /// Oyenza: money that went out.
-    MoneyOut,
-    /// Oyenza: money moved between the person's own wallets.
-    Transfer,
-    /// Oyenza: a credit card bill.
-    Card,
-    /// Oyenza: the tab.
-    Wallet,
-    /// Oyenza: signed out.
-    Unlink,
     /// The header's Settings button.
     Gear,
     /// The System tab: a dial with its needle.
@@ -74,11 +54,19 @@ pub enum Icon {
     Addons,
     /// The Script tab: lines of text with a cue arrow at the line to say.
     Script,
-    /// A crescent moon: Prayer times.
-    Moon,
-    /// Stop (the adzan): a rounded square.
+    /// The Dock tab: three app tiles standing on a shelf.
+    Dock,
+    /// The Notes tab: a sheet with a folded corner and two lines.
+    Note,
+    /// A bell: tell me when a process ends.
+    Bell,
+    /// Go to an app: an arrow out of a box.
+    Open,
+    /// The Agenda tab: a calendar page with one day marked.
+    Agenda,
+    /// Stop (the Script page's reading): a rounded square.
     Stop,
-    /// Record (Oyenza Studio Recorder): a dot that fits inside `Circle`.
+    /// Record (Dyna Island Recorder): a dot that fits inside `Circle`.
     Record,
 }
 
@@ -123,30 +111,12 @@ pub fn parts(icon: Icon) -> &'static [Part] {
             f("M5.4 5.5H7a.9.9 0 0 1 .9.9v11.2a.9.9 0 0 1-.9.9H5.4a.9.9 0 0 1-.9-.9V6.4a.9.9 0 0 1 .9-.9z"),
         ],
         Music => p![s("M9 18V5.5l11-2V16"), s("M3 18a3 3 0 1 0 6 0a3 3 0 1 0-6 0"), s("M14 16a3 3 0 1 0 6 0a3 3 0 1 0-6 0")],
-        Lyrics => p![
-            s("M5.5 4h13A1.5 1.5 0 0 1 20 5.5v10a1.5 1.5 0 0 1-1.5 1.5H10l-4 3.5V17h-.5A1.5 1.5 0 0 1 4 15.5v-10A1.5 1.5 0 0 1 5.5 4z"),
-            s("M8 8.5h8"),
-            s("M8 12h5"),
-        ],
         Timer => p![s("M4 13a8 8 0 1 0 16 0a8 8 0 1 0-16 0"), s("M12 9v4l2.5 2.5"), s("M10 2.5h4"), s("M19 5.5l1.5 1.5")],
         Coffee => p![
             s("M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5z"),
             s("M16 10.5h1.5a2.5 2.5 0 0 1 0 5H16"),
             s("M8.5 3.5V6"),
             s("M12 3.5V6"),
-        ],
-        // Two shoe prints. Each outline starts at a corner of its flat bottom:
-        // closing in the middle of a curve leaves a tiny segment whose join spikes.
-        Steps => p![
-            s("M5.2 12.5C4.8 11.1 4 9.7 4 7.6C4 4.8 5.5 2.5 7.5 2.5C9.5 2.5 11 4.8 11 7.6C11 9.7 10.2 11.1 9.8 12.5Z"),
-            s("M5.5 15H9.5V15.6A2 2 0 0 1 5.5 15.6Z"),
-            s("M14.2 17C13.8 15.6 13 14.2 13 12.1C13 9.3 14.5 7 16.5 7C18.5 7 20 9.3 20 12.1C20 14.2 19.2 15.6 18.8 17Z"),
-            s("M14.5 19.5H18.5V20.1A2 2 0 0 1 14.5 20.1Z"),
-        ],
-        Tray => p![
-            s("M4 13l2.4-7.2a1.6 1.6 0 0 1 1.5-1.1h8.2a1.6 1.6 0 0 1 1.5 1.1L20 13"),
-            s("M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"),
-            s("M4 13h4.5l1.5 2.5h4l1.5-2.5H20"),
         ],
         ListChecks => p![
             s("M11 6h9"),
@@ -205,7 +175,6 @@ pub fn parts(icon: Icon) -> &'static [Part] {
         VolumeMute => p![s(SPEAKER), s("M16 9.5l5 5"), s("M21 9.5l-5 5")],
         Pin => p![s("M9 4h6l-1 5.5 3 3V14H7v-1.5l3-3z"), s("M12 14v6")],
         PinFill => p![f("M9 4h6l-1 5.5 3 3V14H7v-1.5l3-3z"), s("M12 14v6")],
-        Folder => p![s("M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z")],
         File => p![s("M7.5 3H14l5 5v11.5a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 6 19.5v-15A1.5 1.5 0 0 1 7.5 3z"), s("M14 3v5h5")],
         Trash => p![
             s("M4 7h16"),
@@ -218,27 +187,6 @@ pub fn parts(icon: Icon) -> &'static [Part] {
             s("M4 6h10M18 6h2M16 4v4"),
             s("M4 12h4M12 12h8M10 10v4"),
             s("M4 18h12M20 18h.01M18 16v4"),
-        ],
-        Open => p![s("M14 4h6v6"), s("M20 4l-9 9"), s("M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10")],
-        Phone => p![s("M9 2.5h6A2.5 2.5 0 0 1 17.5 5v14a2.5 2.5 0 0 1-2.5 2.5H9A2.5 2.5 0 0 1 6.5 19V5A2.5 2.5 0 0 1 9 2.5z"), s("M11 18.5h2")],
-        Eye => p![s("M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"), s("M9.2 12a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0-5.6 0")],
-        MoneyIn => p![s("M12 4v10.5"), s("M7.5 10.5L12 15l4.5-4.5"), s("M5 19.5h14")],
-        MoneyOut => p![s("M12 20V9.5"), s("M7.5 13.5L12 9l4.5 4.5"), s("M5 4.5h14")],
-        Transfer => p![s("M5 9h12.5"), s("M14.5 6l3 3-3 3"), s("M19 15H6.5"), s("M9.5 12l-3 3 3 3")],
-        Card => p![
-            s("M4.5 6.5h15A1.5 1.5 0 0 1 21 8v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 16V8a1.5 1.5 0 0 1 1.5-1.5z"),
-            s("M3 10h18"),
-            s("M6.5 14h4"),
-        ],
-        Wallet => p![
-            s("M4 7.5h14.5A1.5 1.5 0 0 1 20 9v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18z"),
-            s("M4 7.5l10.5-3v3"),
-            s("M15.5 13.5h2"),
-        ],
-        Unlink => p![
-            s("M9.5 14.5l-1.7 1.7a3 3 0 0 1-4.2-4.2l2.2-2.2a3 3 0 0 1 4.2 0"),
-            s("M14.5 9.5l1.7-1.7a3 3 0 0 1 4.2 4.2l-2.2 2.2a3 3 0 0 1-4.2 0"),
-            s("M4 4l16 16"),
         ],
         Gauge => p![s("M4.6 18.5A8.5 8.5 0 1 1 19.4 18.5"), s("M12 14.5l3.8-4.3"), f("M10.6 14.5a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0-2.8 0")],
         App => p![
@@ -259,9 +207,31 @@ pub fn parts(icon: Icon) -> &'static [Part] {
             s("M17 13.5v7"),
             s("M13.5 17h7"),
         ],
-        // A circle (r 8) less a second one (r 7) up and to the right: both arcs meet where the circles cross.
-        Moon => p![s("M19.77 13.9A8 8 0 1 1 10.1 4.23A7 7 0 0 0 19.77 13.9Z")],
         Script => p![s("M10 6.5h10"), s("M10 12h10"), s("M10 17.5h6.5"), f("M3.6 9.3v5.4a.8.8 0 0 0 1.2.7l4.3-2.7a.8.8 0 0 0 0-1.4L4.8 8.6a.8.8 0 0 0-1.2.7z")],
+        Dock => p![
+            s("M5 8h3.5a1 1 0 0 1 1 1v3.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"),
+            s("M10.25 8h3.5a1 1 0 0 1 1 1v3.5a1 1 0 0 1-1 1h-3.5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"),
+            s("M15.5 8H19a1 1 0 0 1 1 1v3.5a1 1 0 0 1-1 1h-3.5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"),
+            s("M3 17.5h18"),
+        ],
+        Note => p![
+            s("M6.5 3.5h7.5l4.5 4.5v11a1.5 1.5 0 0 1-1.5 1.5h-10.5A1.5 1.5 0 0 1 5 19V5a1.5 1.5 0 0 1 1.5-1.5z"),
+            s("M13.5 3.5V8.5h5"),
+            s("M8.5 12.5h7"),
+            s("M8.5 16h5"),
+        ],
+        Agenda => p![
+            s("M5.5 5h13A1.5 1.5 0 0 1 20 6.5v12a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-12A1.5 1.5 0 0 1 5.5 5z"),
+            s("M4 10h16"),
+            s("M8.5 3v4"),
+            s("M15.5 3v4"),
+            f("M13.5 13h3a.5.5 0 0 1 .5.5v3a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-3a.5.5 0 0 1 .5-.5z"),
+        ],
+        Open => p![s("M14 4h6v6"), s("M20 4l-9 9"), s("M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10")],
+        Bell => p![
+            s("M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15z"),
+            s("M10 20.5a2 2 0 0 0 4 0"),
+        ],
         Stop => p![f("M8.2 6.5h7.6a1.7 1.7 0 0 1 1.7 1.7v7.6a1.7 1.7 0 0 1-1.7 1.7H8.2a1.7 1.7 0 0 1-1.7-1.7V8.2a1.7 1.7 0 0 1 1.7-1.7z")],
         Record => p![f("M6.5 12a5.5 5.5 0 1 0 11 0a5.5 5.5 0 1 0-11 0z")],
     }
@@ -272,14 +242,14 @@ mod tests {
     use super::*;
 
     const ALL: &[Icon] = &[
-        Icon::Play, Icon::Pause, Icon::Next, Icon::Prev, Icon::Music, Icon::Lyrics, Icon::Timer, Icon::Coffee, Icon::Steps,
-        Icon::Tray, Icon::ListChecks, Icon::Check, Icon::CheckCircle, Icon::Circle, Icon::Plus, Icon::Minus,
+        Icon::Play, Icon::Pause, Icon::Next, Icon::Prev, Icon::Music, Icon::Timer, Icon::Coffee,
+        Icon::ListChecks, Icon::Check, Icon::CheckCircle, Icon::Circle, Icon::Plus, Icon::Minus,
         Icon::Close, Icon::Clipboard, Icon::Copy, Icon::Calendar, Icon::Clock, Icon::Cpu, Icon::Memory, Icon::Disk,
         Icon::Battery, Icon::Bolt, Icon::Bluetooth, Icon::Headphones, Icon::Volume, Icon::VolumeLow, Icon::VolumeMute,
-        Icon::Pin, Icon::PinFill, Icon::Folder, Icon::File, Icon::Trash, Icon::Undo, Icon::Reset,
-        Icon::Sliders, Icon::Open, Icon::Phone, Icon::Eye, Icon::MoneyIn, Icon::MoneyOut, Icon::Transfer, Icon::Card, Icon::Wallet,
-        Icon::Unlink, Icon::Gear,
-        Icon::Gauge, Icon::App, Icon::Windows, Icon::Addons, Icon::Moon, Icon::Stop, Icon::Script, Icon::Record,
+        Icon::Pin, Icon::PinFill, Icon::File, Icon::Trash, Icon::Undo, Icon::Reset,
+        Icon::Sliders,
+        Icon::Gear,
+        Icon::Gauge, Icon::App, Icon::Windows, Icon::Addons, Icon::Stop, Icon::Script, Icon::Dock, Icon::Note, Icon::Bell, Icon::Open, Icon::Agenda, Icon::Record,
     ];
 
     #[test]

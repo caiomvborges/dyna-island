@@ -12,9 +12,8 @@
 //! surface to the Classic code, so every surface can move over on its own.
 //!
 //! One module per surface: [`idle`] (the resting pill), [`status`] (the
-//! resting pill under the pointer), [`media`] (music, collapsed), [`lyric`]
-//! (the line being sung, for the music pill), [`live`] (timer, prayer,
-//! game), [`hud`] (volume, charging, Bluetooth), [`notice`], [`expanded`]
+//! resting pill under the pointer), [`media`] (music, collapsed), [`live`]
+//! (timer, game), [`hud`] (volume, charging, Bluetooth), [`notice`], [`expanded`]
 //! (the open card's frame and header), [`music`] (the open Music page) and
 //! [`motion`] (how the floating shape moves).
 
@@ -22,7 +21,6 @@ pub mod expanded;
 pub mod hud;
 pub mod idle;
 pub mod live;
-pub mod lyric;
 pub mod media;
 pub mod motion;
 pub mod music;

@@ -13,7 +13,7 @@
 //! `PresentData/ETW` headers (MIT).
 //!
 //! Windows lets admins and the Performance Log Users group run such a
-//! session. The one-time OK ([`request_access`]) starts Oyenza Studio elevated
+//! session. The one-time OK ([`request_access`]) starts Dyna Island elevated
 //! with `--allow-fps <account SID>`, which adds the account to that group
 //! (found by its fixed SID, S-1-5-32-559, so it works in every Windows
 //! language) and exits. Windows applies group changes at the next sign-in.
@@ -129,15 +129,14 @@ impl Props {
     }
 }
 
-/// "Oyen Poni frames 2": one session per Windows sign-in session, so two
-/// people signed in on one PC don't stop each other's. The name stays the one
-/// from before the rename to Oyenza Studio, so a session an older copy left
-/// running is still stopped by name.
+/// "Dyna Island frames 2": one session per Windows sign-in session, so two
+/// people signed in on one PC don't stop each other's. A session an older
+/// copy left running is still stopped by this name.
 fn session_name(what: &str) -> Vec<u16> {
     let mut session = 0u32;
     // SAFETY: plain out parameter.
     let _ = unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) };
-    let mut v: Vec<u16> = format!("Oyen Poni {what} {session}").encode_utf16().collect();
+    let mut v: Vec<u16> = format!("Dyna Island {what} {session}").encode_utf16().collect();
     v.truncate(NAME_LEN - 1);
     v.push(0);
     v

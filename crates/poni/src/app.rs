@@ -3,19 +3,17 @@
 
 use crate::activities::{self, Mode};
 use crate::clock;
-use crate::commands::{Command, MediaCmd, OyenzaCmd, PairCmd, PhoneCmd};
-use crate::events::{AppEvent, AppleMusicStatus, EventSink, OyenzaEvent, SendHwnd, WM_APP_APPBAR, WM_APP_EVENT, WM_APP_FRAME, WM_APP_TRAY};
+use crate::commands::{Command, MediaCmd};
+use crate::events::{AppEvent, EventSink, SendHwnd, WM_APP_APPBAR, WM_APP_EVENT, WM_APP_FRAME, WM_APP_TRAY};
 use crate::gfx::{px_rect, px_union, scale_about, union_rect, Canvas, Gfx, HitMask};
 use crate::icons::Icon;
 use crate::island::{Geom, Island, SHOULDER};
-use crate::oyen;
 use crate::pages::{self, PageKind};
 use crate::paths;
 use crate::pill;
 use crate::services::{self, Services};
 use crate::state::{
-    AppState, FpsAccess, HudKind, InlineAction, Locate, LyricsState, LyricsStatus, Notice, NoticeAction, OyenzaLink, PairedPhone, PhoneAsk, PhoneDrop,
-    PhoneTransfer, PhoneView, PrayerState,
+    AppState, FpsAccess, HudKind, InlineAction, NoticeAction,
 };
 use crate::tray::{self, Tray};
 use crate::ui::{wid, CursorKind, Hit, Input, KeyInput, MouseButton, Ui};
@@ -24,17 +22,11 @@ use crate::{dragdrop, selftest, shell};
 use poni_core::addons::Status as AddonStatus;
 use poni_core::frametime::{ambient_divisor, MotionStats};
 use poni_core::geom::{palette, Color, Point, Rect};
-use poni_core::health::fmt_steps;
-use poni_core::oyenza;
-use poni_core::pairdrop::{MeetEvent, PeerEvent};
-use poni_core::phonedrop::{Event as PhoneEvent, QrMatrix};
-use poni_core::prayer::{Due, PlaceList, Prayer, PrayerMoment};
-use poni_core::settings::{IdleStyle, PrayerSound, Settings, Theme};
+use poni_core::settings::{IdleStyle, Settings, Theme};
 use poni_core::settings::MonitorChoice;
 use poni_core::store::{load_json, parse_json, save_json_atomic, LoadOutcome, Store};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use windows::core::{w, Result};
 use windows::Foundation::Numerics::Matrix3x2;
@@ -74,11 +66,11 @@ const WM_CAPTURECHANGED_: u32 = 0x0215;
 const WM_WTSSESSION_CHANGE_: u32 = 0x02B1;
 const WTS_SESSION_LOCK_: usize = 7;
 const WTS_SESSION_UNLOCK_: usize = 8;
+/// Outlook is read again this often while someone is at the PC (meetings
+/// move, new ones come in), and no more than this often as the Agenda page opens.
+const AGENDA_EVERY_S: f64 = 300.0;
+const AGENDA_OPEN_S: f64 = 30.0;
 
-/// Steps for copying the Apple Music token (README).
-const APPLE_MUSIC_HELP_URL: &str = "https://github.com/lucacadalora/oyenza-studio#apple-music-lyrics";
-/// Phone drop closes itself after this long without a request from a phone.
-const PHONE_IDLE_S: f64 = 600.0;
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -91,8 +83,9 @@ thread_local! {
 
 /// Modal work that must run without the App borrowed (it pumps messages).
 pub enum Deferred {
-    DragOut(Vec<String>),
     Menu(POINT),
+    /// The Dock's Add: Windows' Open dialog.
+    PickDockApp,
 }
 
 pub fn main_entry() -> i32 {
@@ -235,7 +228,11 @@ fn note_missed(msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
 
 unsafe extern "system" fn island_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     let mut deferred = Vec::new();
-    let res = with_app(|app| app.handle_island(msg, wp, lp, &mut deferred));
+    let res = with_app(|app| {
+        let r = app.handle_island(msg, wp, lp, &mut deferred);
+        deferred.append(&mut app.deferred);
+        r
+    });
     for d in deferred {
         run_deferred(d);
     }
@@ -249,7 +246,11 @@ unsafe extern "system" fn island_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
 
 unsafe extern "system" fn helper_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     let mut deferred = Vec::new();
-    let res = with_app(|app| app.handle_helper(msg, wp, lp, &mut deferred));
+    let res = with_app(|app| {
+        let r = app.handle_helper(msg, wp, lp, &mut deferred);
+        deferred.append(&mut app.deferred);
+        r
+    });
     for d in deferred {
         run_deferred(d);
     }
@@ -268,17 +269,15 @@ unsafe extern "system" fn helper_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
 
 fn run_deferred(d: Deferred) {
     match d {
-        Deferred::DragOut(paths) => {
-            with_app(|app| app.release_mouse());
-            if let Err(e) = dragdrop::drag_out(&paths) {
-                pwarn!("drag out failed: {e}");
-            }
-            with_app(|app| app.request_frame());
-        }
         Deferred::Menu(pt) => {
-            let Some((helper, items)) = with_app(|app| (app.helper, tray::menu_items(&app.st.settings, app.st.pinned, &app.st.oyenza.link, crate::services::recorder::installed()))) else { return };
+            let Some((helper, items)) = with_app(|app| (app.helper, tray::menu_items(&app.st.settings, app.st.pinned))) else { return };
             if let Some(cmd) = tray::show_menu(helper, pt, &items) {
                 with_app(|app| app.on_menu(cmd));
+            }
+        }
+        Deferred::PickDockApp => {
+            if let Some(path) = crate::picker::pick_program(HWND::default()) {
+                with_app(|app| app.add_dock_app(&path));
             }
         }
     }
@@ -305,8 +304,6 @@ pub struct App {
     services: Option<Services>,
     /// The Glass theme's screen copy, light/dark choice and glass.
     glass: crate::glass::Glass,
-    /// Prayer times' adzan, while it plays.
-    adzan: services::adzan::AdzanPlayer,
     /// The glass was still changing on the last frame (turning light or dark).
     glass_moving: bool,
     /// Animation time of the last frame (the vblank it was shown on).
@@ -356,8 +353,6 @@ pub struct App {
     sysmon_on: bool,
     /// What the System reader was last told about nobody being there and battery saver.
     sysmon_rest: poni_core::sysmon::Rest,
-    /// The Oyenza page is on screen: its day list stays live (`services::oyenza`).
-    oyenza_watch: bool,
     /// Show over games: the game's frames, counted while the readout shows.
     frames: Option<services::frames::Frames>,
     /// The process whose frames count (the full-screen app).
@@ -379,11 +374,22 @@ pub struct App {
     script_excluded: bool,
     /// A reading held the island open at the last tick.
     script_held: bool,
-    /// The Script page was on screen at the last tick.
-    script_shown: bool,
-    /// App icons the System page asked for and hasn't got yet (the Shelf's
-    /// thumbnail worker answers both pages with the same event).
+    /// App icons the System page asked for and hasn't got yet (answered by
+    /// the thumbnail worker, `AppEvent::Thumb`).
     icon_wait: HashSet<String>,
+    /// The Outlook agenda add-on's reader, while it is on, and when it was
+    /// last asked (mono seconds).
+    agenda: Option<services::agenda::Agenda>,
+    agenda_asked: f64,
+    /// The Agenda page was on screen at the last frame (it asks for a fresh read when it opens).
+    agenda_shown: bool,
+    /// The waits behind `st.watched`, by pid (dropping one stops it).
+    watches: std::collections::HashMap<u32, services::watch::Watch>,
+    /// Dock icons asked for and not here yet (the same worker answers them).
+    dock_wait: HashSet<String>,
+    /// Modal work asked for by a command (the Dock's Open dialog), run once
+    /// the message that ran the commands is done.
+    deferred: Vec<Deferred>,
     tray: Option<Tray>,
     taskbar_created_msg: u32,
     selftest: Option<selftest::SelfTest>,
@@ -418,12 +424,6 @@ pub struct App {
     collapse_due: bool,
     /// When the pointer last closed the island by leaving it.
     left_at: f64,
-    /// Phone drop's web server while the Shelf's phone panel is open.
-    phone: Option<services::phonedrop::PhoneDrop>,
-    /// The Shelf paths last handed to it (to notice changes).
-    phone_offer: Vec<String>,
-    /// The Shelf paths last handed to the paired-phones service.
-    pair_offer: Option<Vec<String>>,
     /// Whether the island floated when the window was last laid out (its
     /// room differs: see `sync_room`).
     laid_floating: bool,
@@ -455,7 +455,7 @@ const DWELL_SLOP: f32 = 4.0;
 /// (while it is still shrinking) opens it again at once, from where the
 /// outline is: overshooting an edge costs no close-and-reopen.
 const REOPEN_S: f64 = 0.3;
-/// A hold that kept the island open (typing, a file drag, Phone drop, the
+/// A hold that kept the island open (typing, a file drag, the
 /// pin) ended while the pointer is elsewhere: close after this grace, so
 /// the change can be seen.
 const HOLD_GRACE_MS: u32 = 380;
@@ -529,7 +529,6 @@ impl App {
             rx,
             services: None,
             glass: crate::glass::Glass::new(services::apps_use_light_theme()),
-            adzan: Default::default(),
             glass_moving: false,
             last_frame_t: 0.0,
             surface: Surface::default(),
@@ -555,7 +554,6 @@ impl App {
             sysmon: None,
             sysmon_on: false,
             sysmon_rest: poni_core::sysmon::Rest::default(),
-            oyenza_watch: false,
             frames: None,
             game_pid: None,
             game_peek_until: 0.0,
@@ -565,8 +563,13 @@ impl App {
             script_hotkey: false,
             script_excluded: false,
             script_held: false,
-            script_shown: false,
             icon_wait: HashSet::new(),
+            dock_wait: HashSet::new(),
+            watches: std::collections::HashMap::new(),
+            agenda: None,
+            agenda_asked: f64::NEG_INFINITY,
+            agenda_shown: false,
+            deferred: Vec::new(),
             tray: None,
             taskbar_created_msg,
             selftest,
@@ -588,9 +591,6 @@ impl App {
             hover_arm: None,
             collapse_due: false,
             left_at: f64::NEG_INFINITY,
-            phone: None,
-            phone_offer: Vec::new(),
-            pair_offer: None,
             laid_floating: false,
         })
     }
@@ -601,10 +601,8 @@ impl App {
         self.st.power = services::power::query();
         services::power::register(self.helper);
         if !fake {
-            self.services = Some(Services::start(&self.sink, self.hwnd, self.helper, &self.st.settings, self.oyenza_activity()));
+            self.services = Some(Services::start(&self.sink, self.hwnd, self.helper, &self.st.settings));
             self.sync_top_watch();
-            self.st.paired = self.services.as_ref().map(|s| paired_phones(s.pairs())).unwrap_or_default();
-            self.sync_pair_offer();
             if self.st.settings.system_history {
                 self.start_sysmon();
             }
@@ -616,13 +614,12 @@ impl App {
             }
             self.try_add_tray();
             services::power::register_session(self.helper);
+            // The Outlook agenda add-on, when it was left on.
+            self.refresh_time();
+            self.sync_agenda();
         }
         if let Err(e) = dragdrop::register(self.hwnd, self.sink.clone()) {
             pwarn!("drop target registration failed: {e}");
-        }
-        // Refresh shelf thumbnails.
-        for p in self.st.store.shelf.paths() {
-            self.st.cmds.push(Command::LoadThumb(p));
         }
         self.schedule_minute_timer();
         if let Some(t) = self.selftest.as_mut() {
@@ -639,9 +636,6 @@ impl App {
         self.set_peek_hotkey(false);
         self.set_script_hotkey(false);
         self.glass.stop(self.hwnd, &mut self.gfx);
-        if let Some(p) = self.phone.take() {
-            p.stop();
-        }
         if let Some(t) = self.tray.take() {
             t.remove();
         }
@@ -724,7 +718,7 @@ impl App {
     /// (a theme switch into or out of Pill, the self-test picking its theme
     /// after start, or the outline docking at the edge after rising back to
     /// it): lay the window out again for the new room, grown for the gap and
-    /// the shadow or given back, so Classic, Oyen and Glass keep exactly the
+    /// the shadow or given back, so Classic, Light and Glass keep exactly the
     /// window they start with and Pill gets its own. Called every frame
     /// after the island steps; a layout only on that change.
     fn sync_room(&mut self) {
@@ -808,7 +802,7 @@ impl App {
                 // Clear `pending` after the frame so a slow frame can't keep the
                 // queue permanently non-empty (which starves WM_TIMER).
                 let tick = self.clock.tick();
-                self.frame(deferred, Some(tick));
+                self.frame(Some(tick));
                 self.clock.frame_handled();
                 Some(LRESULT(0))
             }
@@ -1064,7 +1058,7 @@ impl App {
                 }
                 if msg == WM_SETTINGCHANGE && self.st.settings.theme == Theme::Glass {
                     self.st.accent = theme_accent(Theme::Glass);
-                } else if msg == WM_SETTINGCHANGE && !oyen::on(self.st.settings.theme) {
+                } else if msg == WM_SETTINGCHANGE && self.st.settings.theme != Theme::Light {
                     if let Some(a) = services::system_accent() {
                         self.st.accent = a;
                     }
@@ -1130,7 +1124,6 @@ impl App {
                 }
                 let p = services::power::query();
                 self.on_event(AppEvent::Power(p));
-                self.tell_oyenza_activity();
                 self.tell_sysmon_rest();
                 self.request_frame();
                 Some(LRESULT(1))
@@ -1141,7 +1134,6 @@ impl App {
                     WTS_SESSION_UNLOCK_ => self.locked = false,
                     _ => {}
                 }
-                self.tell_oyenza_activity();
                 self.tell_sysmon_rest();
                 self.request_frame();
                 Some(LRESULT(0))
@@ -1243,7 +1235,10 @@ impl App {
             }
             TIMER_MINUTE => {
                 self.schedule_minute_timer();
-                self.close_idle_phone();
+                self.refresh_time();
+                self.ask_agenda(AGENDA_EVERY_S);
+                // The countdown may have just begun or ended.
+                self.request_frame();
             }
             TIMER_TRAY => {
                 unsafe {
@@ -1266,255 +1261,6 @@ impl App {
             _ => {}
         }
         self.request_frame();
-    }
-
-    /// Save the Apple Music token copied from the browser (sealed with DPAPI)
-    /// and keep it off the clipboard and out of Poni's clipboard history.
-    fn use_apple_music_token(&mut self) {
-        let text = services::clipboard::read_text(self.hwnd).unwrap_or_default();
-        let Some(token) = poni_core::applemusic::clean_user_token(&text) else {
-            self.st.notify(Icon::Lyrics, palette::ORANGE, "No Apple Music token copied", "Copy media-user-token first", 6.0, None);
-            return;
-        };
-        if let Err(e) = services::secret::save(&paths::apple_music_token_path(), &token) {
-            pwarn!("apple music: cannot save the token ({e})");
-            self.st.notify(Icon::Lyrics, palette::ORANGE, "Couldn't save the token", "Details in poni.log", 5.0, None);
-            return;
-        }
-        pinfo!("apple music: token saved");
-        self.forget_clipboard_text(&token);
-        if let Some(s) = self.services.as_ref() {
-            s.apple_music_token_changed();
-        }
-        self.refetch_lyrics();
-        self.st.notify(Icon::Lyrics, palette::BLUE, "Checking the Apple Music token", "One moment", 4.0, None);
-    }
-
-    fn forget_apple_music_token(&mut self) {
-        if let Err(e) = services::secret::delete(&paths::apple_music_token_path()) {
-            pwarn!("apple music: cannot remove the token ({e})");
-            self.st.notify(Icon::Lyrics, palette::ORANGE, "Couldn't remove the token", "Details in poni.log", 5.0, None);
-            return;
-        }
-        pinfo!("apple music: token removed");
-        if let Some(s) = self.services.as_ref() {
-            s.apple_music_token_changed();
-        }
-        self.refetch_lyrics();
-        self.st.notify(Icon::Lyrics, palette::BLUE, "Apple Music lyrics off", "Lyrics from LRCLIB only", 4.0, None);
-    }
-
-    fn on_apple_music(&mut self, status: AppleMusicStatus) {
-        let (color, title, subtitle) = match status {
-            AppleMusicStatus::Accepted => (palette::GREEN, "Apple Music lyrics on", "LRCLIB fills in the rest"),
-            AppleMusicStatus::Rejected => (palette::ORANGE, "Apple Music token not accepted", "Copy a fresh one from music.apple.com"),
-            AppleMusicStatus::Unreachable => (palette::ORANGE, "Can't reach Apple Music", "Token saved; trying again later"),
-            AppleMusicStatus::NoAccess => (palette::ORANGE, "No lyrics from Apple Music", "They need an Apple Music subscription"),
-        };
-        self.st.notify(Icon::Lyrics, color, title, subtitle, 6.0, None);
-    }
-
-    // ------------------------------------------------------------ Oyenza
-
-    /// How the Oyenza worker should pace itself: in use (unlocked, display
-    /// on) and the power source.
-    fn oyenza_activity(&self) -> services::oyenza::Activity {
-        let p = self.st.power;
-        services::oyenza::Activity { in_use: !self.locked && !self.display_off, on_ac: p.on_ac || !p.has_battery, saver: p.saver, watching: self.oyenza_watch }
-    }
-
-    /// The Oyenza page came on screen or went: the worker keeps its list live only meanwhile.
-    fn set_oyenza_watch(&mut self, on: bool) {
-        if on != self.oyenza_watch {
-            self.oyenza_watch = on;
-            self.tell_oyenza_activity();
-        }
-    }
-
-    fn tell_oyenza_activity(&self) {
-        if let Some(s) = self.services.as_ref() {
-            s.oyenza_activity(self.oyenza_activity());
-        }
-    }
-
-    fn oyenza(&self, c: OyenzaCmd) {
-        if let Some(s) = self.services.as_ref() {
-            s.oyenza(c);
-        }
-    }
-
-    fn on_oyenza(&mut self, ev: OyenzaEvent) {
-        let now = self.st.now;
-        let link_before = self.st.oyenza.link.clone();
-        match ev {
-            OyenzaEvent::Restored { account } => self.st.oyenza.link = OyenzaLink::Connected { account },
-            OyenzaEvent::Connecting { code, url, expires_in_s } => {
-                self.st.oyenza.link = OyenzaLink::Connecting { code, url, until: now + expires_in_s as f64 };
-                // Keep the code on screen while the person goes to oyenza.app.
-                if self.st.oyenza.pinned_before.is_none() {
-                    self.st.oyenza.pinned_before = Some(self.st.pinned);
-                }
-                self.st.pinned = true;
-                self.st.page = PageKind::Oyenza;
-                self.expand();
-            }
-            OyenzaEvent::Connected { account } => {
-                self.end_sign_in();
-                self.st.notify(Icon::Check, palette::GREEN, "Connected to Oyenza", format!("as {account}"), 6.0, Some(NoticeAction::OpenPage(PageKind::Oyenza)));
-                self.st.oyenza.link = OyenzaLink::Connected { account };
-            }
-            OyenzaEvent::ConnectFailed(code) => {
-                self.end_sign_in();
-                self.st.oyenza.link = OyenzaLink::Off;
-                let (title, subtitle) = oyenza::connect_failure_text(&code);
-                self.st.notify(Icon::Unlink, palette::ORANGE, title, subtitle, 6.0, None);
-            }
-            OyenzaEvent::ConnectCancelled => {
-                self.end_sign_in();
-                self.st.oyenza.link = OyenzaLink::Off;
-            }
-            OyenzaEvent::Money { arrived } => {
-                let o = &mut self.st.oyenza;
-                o.updated_unix = Some(self.st.unix);
-                let fresh = oyenza::unseen(&mut o.shown, &arrived);
-                if let Some(n) = oyenza::money_notice(&fresh) {
-                    let (icon, color) = match n.flow {
-                        Some(oyenza::Flow::In) => (Icon::MoneyIn, palette::GREEN),
-                        Some(oyenza::Flow::Out) => (Icon::MoneyOut, palette::BLUE),
-                        _ => (Icon::Wallet, palette::BLUE),
-                    };
-                    self.oyenza_notice(icon, color, n.title, n.shown, Some(n.hidden));
-                }
-            }
-            OyenzaEvent::Activity(a) => {
-                let o = &mut self.st.oyenza;
-                o.seen.note(&a.days, now);
-                o.activity = Some(a);
-                o.updated_unix = Some(self.st.unix);
-            }
-            OyenzaEvent::ActivityChecked => self.st.oyenza.updated_unix = Some(self.st.unix),
-            OyenzaEvent::Bills { today, bills } => {
-                let day = if today.is_empty() { self.st.day_key() } else { today };
-                self.st.oyenza.bills = bills;
-                self.st.oyenza.bills_today = day.clone();
-                self.st.oyenza.updated_unix = Some(self.st.unix);
-                self.remind_bills(&day);
-            }
-            OyenzaEvent::NoteSaved(saved) => {
-                let o = &mut self.st.oyenza;
-                o.saving = false;
-                o.input.clear();
-                o.error = None;
-                o.saved = Some((saved, now + oyenza::UNDO_S));
-            }
-            OyenzaEvent::NoteFailed { text, code } => {
-                let o = &mut self.st.oyenza;
-                o.saving = false;
-                if o.input.trim().is_empty() {
-                    o.input = text;
-                }
-                o.error = Some(oyenza::note_error_text(&code).into());
-            }
-            OyenzaEvent::Undone => self.st.oyenza.flash = Some(("Taken back".into(), now + 3.0)),
-            OyenzaEvent::UndoFailed(code) => {
-                let line = if code == "too_late" { "Too late to undo here. Change it in oyenza.app" } else { "Couldn't undo. Change it in oyenza.app" };
-                self.st.oyenza.flash = Some((line.into(), now + 5.0));
-            }
-            OyenzaEvent::Disconnected { by_server } => {
-                self.end_sign_in();
-                self.st.oyenza = crate::state::OyenzaState::default();
-                let (title, subtitle) =
-                    if by_server { ("Oyenza disconnected", "Sign in again in Settings") } else { ("Disconnected from Oyenza", "Sign in again any time in Settings") };
-                self.st.notify(Icon::Unlink, palette::TEXT_DIM, title, subtitle, 6.0, None);
-            }
-        }
-        // The Oyenza tab came or went: the window makes room for its page (or no longer has to).
-        if self.st.oyenza.link != link_before {
-            self.layout_surface();
-        }
-    }
-
-    /// The code is gone (signed in, refused, cancelled): the island stops
-    /// staying open for it.
-    fn end_sign_in(&mut self) {
-        if let Some(p) = self.st.oyenza.pinned_before.take() {
-            self.st.pinned = p;
-            if !p {
-                self.maybe_schedule_collapse();
-            }
-        }
-    }
-
-    /// A money or bill notice. Its sum waits for Show unless the tray's "Show
-    /// amounts on the island" is on (`hidden` None: nothing to hide). While a
-    /// full-screen app hides the island it waits, and shows when the island
-    /// is back if it isn't old by then.
-    fn oyenza_notice(&mut self, icon: Icon, color: Color, title: String, shown: String, hidden: Option<String>) {
-        let now = self.st.now;
-        let hide = hidden.is_some() && !self.st.settings.oyenza_show_amounts;
-        let notice = Notice {
-            icon,
-            color,
-            title,
-            subtitle: if hide { hidden.unwrap_or_default() } else { shown.clone() },
-            until: now + oyenza::NOTICE_S,
-            action: Some(NoticeAction::OpenPage(PageKind::Oyenza)),
-            inline: hide.then_some(InlineAction::ShowAmount),
-            reveal: hide.then_some(shown),
-        };
-        if self.fullscreen_hidden {
-            self.st.oyenza.held = Some((notice, now));
-        } else {
-            self.st.notice = Some(notice);
-        }
-    }
-
-    fn show_held_notice(&mut self, now: f64) {
-        if let Some((mut n, at)) = self.st.oyenza.held.take() {
-            if now - at <= oyenza::HELD_MAX_S {
-                n.until = now + oyenza::NOTICE_S;
-                self.st.notice = Some(n);
-            }
-        }
-    }
-
-    /// One reminder per bill, the day before it (or on the day, if the PC was
-    /// off), from the morning on; the rest come with the next look.
-    fn remind_bills(&mut self, today: &str) {
-        let st = &mut self.st;
-        oyenza::prune_noticed(&mut st.store.oyenza_noticed, today);
-        if st.local.hour < oyenza::BILL_HOUR {
-            return;
-        }
-        let Some(b) = oyenza::bills_to_remind(&st.oyenza.bills, today, &st.store.oyenza_noticed).first().map(|b| (*b).clone()) else { return };
-        st.store.oyenza_noticed.push(oyenza::notice_key(&b));
-        st.save();
-        let (shown, hidden) = oyenza::bill_subtitles(&b);
-        let icon = if b.is_card() { Icon::Card } else { Icon::Calendar };
-        self.oyenza_notice(icon, palette::ORANGE, oyenza::bill_title(&b, today), shown, hidden);
-    }
-
-    /// Remove history entries holding `secret` and clear the clipboard.
-    fn forget_clipboard_text(&mut self, secret: &str) {
-        let hits: Vec<usize> = self.st.clip.iter().enumerate().filter(|(_, c)| c.text.contains(secret)).map(|(i, _)| i).collect();
-        for i in hits.into_iter().rev() {
-            self.st.clip.remove(i);
-        }
-        self.st.ui.clip_flash = None;
-        self.own_clip = Some(String::new());
-        services::clipboard::set_text(self.helper, "");
-    }
-
-    /// Look up the current track's lyrics again (the sources changed).
-    fn refetch_lyrics(&mut self) {
-        if !self.st.settings.lyrics {
-            return;
-        }
-        let Some(m) = self.st.media.clone().filter(|m| !m.title.is_empty()) else { return };
-        if let Some(svc) = self.services.as_ref() {
-            self.st.lyrics = LyricsState { track_key: m.track_key.clone(), status: LyricsStatus::Loading, ..Default::default() };
-            svc.request_lyrics(&m);
-        }
     }
 
     /// Apply side effects of a settings change (from the menu, a reload or a page).
@@ -1540,43 +1286,23 @@ impl App {
             self.st.ui.clip_flash = None;
             self.st.ui.clip_scroll = 0.0;
         }
-        if !before.lyrics && now.lyrics {
-            if let Some(m) = self.st.media.clone() {
-                let stale = self.st.lyrics.track_key != m.track_key || self.st.lyrics.status == LyricsStatus::Idle;
-                if stale && !m.title.is_empty() {
-                    if let Some(svc) = self.services.as_ref() {
-                        self.st.lyrics = LyricsState { track_key: m.track_key.clone(), status: LyricsStatus::Loading, ..Default::default() };
-                        svc.request_lyrics(&m);
-                    }
-                }
-            }
-        }
         self.st.pomodoro.cfg = self.st.settings.pomodoro.clone();
         if let Some(s) = self.services.as_ref() {
             s.set_clipboard_history(self.st.settings.clipboard_history);
         }
-        // Prayer times: off stops it at once; a new place, or following the location again.
-        let prayer_id = poni_core::addons::PRAYER_TIMES.id;
-        if before.addon_on(prayer_id) && !self.st.settings.addon_on(prayer_id) {
-            self.prayer_off();
-        }
-        if before.prayer.place != self.st.settings.prayer.place {
-            self.resolve_prayer_place();
-        }
-        if !before.prayer.follow_location && self.st.settings.prayer.follow_location && self.st.prayer_on() {
-            self.locate();
-        }
-        // An add-on switched on downloads its files; off deletes them.
+        // An add-on switched on or off.
         for a in poni_core::addons::ALL {
             let on = self.st.settings.addon_on(a.id);
             if before.addon_on(a.id) != on {
                 pinfo!("add-ons: {} switched {}", a.id, if on { "on" } else { "off" });
-                self.st.addons.insert(a.id, if !on { AddonStatus::Off } else if a.downloads() { AddonStatus::Checking } else { AddonStatus::Ready });
-                if let Some(s) = self.services.as_ref() {
-                    s.set_addon(a.id, on);
-                }
+                self.st.addons.insert(a.id, if on { AddonStatus::Ready } else { AddonStatus::Off });
             }
         }
+        // A new link (or none): the reader starts or stops, and a new one reads now.
+        if before.agenda_link != self.st.settings.agenda_link {
+            self.agenda = None;
+        }
+        self.sync_agenda();
         if before.game_stats != self.st.settings.game_stats {
             if self.st.settings.game_stats && self.st.game.access == FpsAccess::Unknown {
                 self.check_fps();
@@ -1615,15 +1341,12 @@ impl App {
             SetTheme(theme) => s.theme = theme,
             ToggleClipboard => s.clipboard_history = !s.clipboard_history,
             ToggleSystemHistory => s.system_history = !s.system_history,
-            ToggleLyrics => s.lyrics = !s.lyrics,
-            TogglePronunciation => s.lyrics_pronunciation = !s.lyrics_pronunciation,
             SetHideFullscreen(hide) => s.hide_in_fullscreen = hide,
             SetStepAside(aside) => s.step_aside = aside,
             ToggleGameStats => s.game_stats = !s.game_stats,
             ToggleGamePeek => s.game_peek = !s.game_peek,
             ToggleSounds => s.sounds = !s.sounds,
             TogglePinned => self.st.pinned = !self.st.pinned,
-            RecordScreen => crate::services::recorder::record_screen(self.hwnd),
             ToggleAutostart => {
                 let on = crate::autostart::is_enabled();
                 if let Err(e) = crate::autostart::set_enabled(!on) {
@@ -1665,16 +1388,6 @@ impl App {
                 }
             }
             OpenDataFolder => shell::open(&paths::data_dir().to_string_lossy()),
-            About => shell::open(&crate::version::notes_url()),
-            LyricsCredit => shell::open("https://lrclib.net"),
-            AppleMusicToken => self.use_apple_music_token(),
-            AppleMusicHelp => shell::open(APPLE_MUSIC_HELP_URL),
-            AppleMusicForget => self.forget_apple_music_token(),
-            OyenzaSignIn => self.oyenza(OyenzaCmd::SignIn),
-            OyenzaCancel => self.oyenza(OyenzaCmd::Cancel),
-            OyenzaDisconnect => self.oyenza(OyenzaCmd::Disconnect),
-            OyenzaOpen => shell::open(oyenza::WEB),
-            ToggleOyenzaAmounts => s.oyenza_show_amounts = !s.oyenza_show_amounts,
             Quit => {
                 self.quit(0);
                 return;
@@ -1698,7 +1411,6 @@ impl App {
                 }
             }
             AppEvent::Media(session) => {
-                let prev_key = self.st.media.as_ref().map(|m| m.track_key.clone());
                 match session {
                     Some(mut s) => {
                         // Keep already-decoded art if the track didn't change.
@@ -1710,22 +1422,9 @@ impl App {
                                 }
                             }
                         }
-                        let changed = prev_key.as_deref() != Some(s.track_key.as_str());
-                        if changed {
-                            self.st.lyrics = LyricsState { track_key: s.track_key.clone(), status: LyricsStatus::Idle, ..Default::default() };
-                            if self.st.settings.lyrics && !s.title.is_empty() {
-                                if let Some(svc) = self.services.as_ref() {
-                                    self.st.lyrics.status = LyricsStatus::Loading;
-                                    svc.request_lyrics(&s);
-                                }
-                            }
-                        }
                         self.st.media = Some(s);
                     }
-                    None => {
-                        self.st.media = None;
-                        self.st.lyrics = LyricsState::default();
-                    }
+                    None => self.st.media = None,
                 }
             }
             AppEvent::MediaTimeline { track_key, timeline } => {
@@ -1740,33 +1439,6 @@ impl App {
                     if m.track_key == track_key {
                         m.art_color = art.as_ref().map(|a| a.accent_color());
                         m.art = art;
-                    }
-                }
-            }
-            AppEvent::Lyrics { track_key, result } => {
-                if self.st.lyrics.track_key == track_key {
-                    match result {
-                        crate::events::LyricsResult::Found { lyrics, source, ruby, wants_ja_readings } => {
-                            self.st.lyrics.status = LyricsStatus::Found;
-                            self.st.lyrics.lyrics = Some(lyrics);
-                            self.st.lyrics.source = source;
-                            self.st.lyrics.ruby = ruby;
-                            self.st.lyrics.wants_ja_readings = wants_ja_readings;
-                            // The first Japanese song whose kanji went unread
-                            // switches Japanese readings on, as its switch in
-                            // Add-ons would: it downloads once (3.8 MB) and
-                            // the song is read again with romaji. Only people
-                            // who play Japanese songs get it; switched off by
-                            // hand, it stays off (the Music page still offers it).
-                            if poni_core::addons::ja_switches_on(&self.st.settings, wants_ja_readings) {
-                                pinfo!("lyrics: a Japanese song's kanji went unread; switching Japanese readings on");
-                                self.st.settings.set_addon(poni_core::addons::JAPANESE_READINGS.id, true);
-                                self.st.cmd(Command::SaveSettings);
-                            }
-                        }
-                        crate::events::LyricsResult::Instrumental => self.st.lyrics.status = LyricsStatus::Instrumental,
-                        crate::events::LyricsResult::NotFound => self.st.lyrics.status = LyricsStatus::NotFound,
-                        crate::events::LyricsResult::Error(e) => self.st.lyrics.status = LyricsStatus::Error(e),
                     }
                 }
             }
@@ -1806,48 +1478,36 @@ impl App {
                     self.request_frame();
                 }
             }
-            AppEvent::ShelfAdd(paths) if self.expanded && self.st.page == PageKind::Script && pages::script::take_drop(&mut self.st, &paths) => {
+            AppEvent::FilesDropped(paths) => {
                 // A text file dropped on the Script page becomes the script.
                 self.drag_hover = false;
                 self.st.drag_hover = false;
-                self.request_frame();
-            }
-            AppEvent::ShelfAdd(paths) => {
-                let n = self.st.store.shelf.add_paths(&paths, self.st.unix);
-                for p in &paths {
-                    self.st.cmds.push(Command::LoadThumb(p.clone()));
-                }
-                self.st.save();
-                self.st.page = PageKind::Shelf;
-                self.drag_hover = false;
-                self.st.drag_hover = false;
-                self.expand();
-                pinfo!("shelf: {n} new item(s)");
-            }
-            AppEvent::DragHover(on) => {
-                self.drag_hover = on;
-                self.st.drag_hover = on;
-                if on {
-                    // The Script page takes a text file; everything else goes to the Shelf.
-                    if !(self.expanded && self.st.page == PageKind::Script) {
-                        self.st.page = PageKind::Shelf;
-                    }
-                    self.expand();
+                if self.expanded && self.st.page == PageKind::Script && pages::script::take_drop(&mut self.st, &paths) {
+                    self.request_frame();
                 } else {
                     self.maybe_schedule_collapse();
                 }
             }
-            AppEvent::ShelfThumb { path, image } => {
-                // The answer to an app icon the System page asked for (only that
-                // answer touches its icons), and to the Shelf when it asked too.
-                let ours = self.icon_wait.remove(&path);
-                let for_shelf = !ours || self.st.shelf_thumbs.contains_key(&path);
-                if ours {
+            AppEvent::DragHover(on) => {
+                self.drag_hover = on;
+                self.st.drag_hover = on;
+                if on && self.st.script_on() {
+                    // Only the Script page takes files (a text file to read).
+                    self.st.page = PageKind::Script;
+                    self.expand();
+                } else if !on {
+                    self.maybe_schedule_collapse();
+                }
+            }
+            AppEvent::Thumb { path, image } => {
+                // The answer to an app icon the System page or the Dock asked for.
+                if self.icon_wait.remove(&path) {
                     let px = pages::system::icon_px(self.gfx.scale());
                     self.st.app_icons.insert(path.clone(), image.as_ref().map(|i| pages::system::shrink_icon(i, px)));
                 }
-                if for_shelf {
-                    self.st.shelf_thumbs.insert(path, image);
+                if self.dock_wait.remove(&path) {
+                    let px = pages::dock::icon_px(self.gfx.scale());
+                    self.st.dock_icons.insert(path, image.as_ref().map(|i| pages::system::shrink_icon(i, px)));
                 }
             }
             AppEvent::Stats(s) => self.st.stats = s,
@@ -1889,36 +1549,26 @@ impl App {
                     self.st.clip.push(&t, self.st.unix);
                 }
             }
-            AppEvent::AppleMusic(status) => self.on_apple_music(status),
-            AppEvent::Phone(e) => self.on_phone(e),
-            AppEvent::Paired(e) => self.on_paired(e),
-            AppEvent::Oyenza(ev) => self.on_oyenza(ev),
             AppEvent::Autostart(on) => self.st.ui.autostart = Some(on),
-            AppEvent::Addon { id, status } => {
-                // A late report from before a switch-off doesn't bring it back.
-                if self.st.settings.addon_on(id) || status == AddonStatus::Off {
-                    self.st.addons.insert(id, status);
-                }
-                if id == poni_core::addons::PRAYER_TIMES.id {
-                    if status == AddonStatus::Ready && self.st.settings.addon_on(id) && self.st.prayer.places.is_none() {
-                        self.prayer_ready();
-                    } else if status == AddonStatus::Off {
-                        self.prayer_off();
-                    }
-                }
-                // Japanese readings arrived for the song that asked for them:
-                // read it again (its lyrics come from the cache).
-                if id == poni_core::addons::JAPANESE_READINGS.id && status == AddonStatus::Ready && self.st.lyrics.wants_ja_readings {
-                    if let (Some(svc), Some(m)) = (self.services.as_ref(), self.st.media.as_ref()) {
-                        if m.track_key == self.st.lyrics.track_key {
-                            pinfo!("lyrics: Japanese readings are on this PC; reading the song again");
-                            svc.request_lyrics(m);
+            AppEvent::ProcessExited { pid, code } => self.on_process_exited(pid, code),
+            AppEvent::Agenda(read) => {
+                use crate::state::AgendaStatus;
+                use services::agenda::AgendaRead;
+                // A read still on its way when the link went is dropped.
+                if self.st.agenda_reads() {
+                    let a = &mut self.st.agenda;
+                    match read {
+                        AgendaRead::Meetings(list) => {
+                            a.meetings = list;
+                            a.status = AgendaStatus::Ready;
+                            a.read_at = Some(poni_core::datetime::fmt_clock(&self.st.local, self.st.settings.use_24h));
                         }
+                        // Offline, the meetings last read stay (and keep counting down).
+                        AgendaRead::Offline(why) => a.status = AgendaStatus::Offline(why),
+                        AgendaRead::Failed(why) => a.status = AgendaStatus::Failed(why),
                     }
                 }
             }
-            AppEvent::Located(found) => self.on_located(found),
-            AppEvent::AdzanEnded => self.adzan_ended(),
             AppEvent::Log(s) => pinfo!("{s}"),
         }
         if let Some(before) = media_before {
@@ -1962,9 +1612,6 @@ impl App {
         if !self.expanded {
             self.expanded = true;
             self.cancel_hover();
-            if self.st.page == PageKind::Oyenza {
-                self.oyenza(OyenzaCmd::Refresh);
-            }
         }
         self.request_frame();
     }
@@ -1993,10 +1640,6 @@ impl App {
             self.set_stats(false);
             self.set_sysmon(false);
             self.st.ui.clip_flash = None;
-            // Sums shown in the Oyenza tab hide again, and it opens on Today next time.
-            self.st.oyenza.reveal = false;
-            self.st.oyenza.day = oyenza::DayPick::Today;
-            self.st.oyenza.scroll = 0.0;
             // Settings closes with the island: it opens again on the page it was opened from.
             if self.st.page == PageKind::Settings {
                 self.st.page = self.st.ui.before_settings.take().filter(|p| pages::tabs(&self.st).contains(p)).unwrap_or(PageKind::ALL[0]);
@@ -2011,9 +1654,9 @@ impl App {
     }
 
     /// Nothing holds the open island: no pointer on it, no pin, typing,
-    /// file drag, press or Phone drop.
+    /// file drag or press.
     fn free_to_collapse(&self) -> bool {
-        !self.hovering && !self.st.pinned && !self.text_focus && !self.drag_hover && self.input.pressed_id.is_none() && !self.phone_holds()
+        !self.hovering && !self.st.pinned && !self.text_focus && !self.drag_hover && self.input.pressed_id.is_none() && !self.st.page_holds_island()
     }
 
     /// The pointer left the open island: it starts closing on the next frame,
@@ -2035,7 +1678,7 @@ impl App {
 
     /// A hold ended (see [`HOLD_GRACE_MS`]): close soon unless the pointer is on the island.
     fn maybe_schedule_collapse(&mut self) {
-        if self.expanded && !self.hovering && !self.st.pinned && !self.text_focus && !self.drag_hover && !self.phone_holds() {
+        if self.expanded && !self.hovering && !self.st.pinned && !self.text_focus && !self.drag_hover && !self.st.page_holds_island() {
             unsafe {
                 SetTimer(self.hwnd, TIMER_COLLAPSE, HOLD_GRACE_MS.max(self.st.settings.collapse_delay_ms), None);
             }
@@ -2148,10 +1791,6 @@ impl App {
             }
             let why = if self.fullscreen_on && !self.st.settings.hide_in_fullscreen && self.st.game.active { " (show over games)" } else { "" };
             pinfo!("fullscreen app {}: island {}{why}", if self.fullscreen_on { "in front" } else { "gone" }, if hide { "hidden" } else { "shown" });
-            // Notices held back wait for the game to leave, not for a peek.
-            if !hide && !self.fullscreen_on {
-                self.show_held_notice(now);
-            }
         }
         if !hide {
             // A borderless game or a browser in F11 may have taken the
@@ -2241,14 +1880,9 @@ impl App {
 
     /// The Script page: a reading pauses while its page isn't on screen, the
     /// island may close once nothing holds it, and the shortcut is Poni's
-    /// only while there's a script to read on the page. Whether Record shows
-    /// is asked as the page comes on screen.
+    /// only while there's a script to read on the page.
     fn script_tick(&mut self) {
         let shown = self.expanded && self.st.page == PageKind::Script && !self.locked && !self.display_off && !self.fullscreen_hidden;
-        if shown && !self.script_shown && self.selftest.is_none() {
-            self.st.recorder = services::recorder::installed();
-        }
-        self.script_shown = shown;
         if !shown && self.st.script.playing() {
             self.st.script.pause(self.st.now);
         }
@@ -2618,21 +2252,12 @@ impl App {
         if let Some(ended) = self.st.pomodoro.tick(now) {
             pages::focus::on_phase_ended(&mut self.st, ended);
         }
-        // Signed out: the Oyenza tab is gone.
-        if self.st.page == PageKind::Oyenza && !self.st.oyenza.tab_visible() {
-            self.st.page = PageKind::ALL[0];
-        }
-        self.prayer_tick();
         self.script_tick();
-        // Prayer times switched off: its tab is gone.
-        if self.st.page == PageKind::Prayer && !self.st.prayer_on() {
-            self.st.page = PageKind::Addons;
-        }
     }
 
     /// Draw and show one frame. `tick` is the vblank that triggered it (None
     /// for self-test captures, which run off the clock).
-    fn frame(&mut self, deferred: &mut Vec<Deferred>, tick: Option<FrameTick>) {
+    fn frame(&mut self, tick: Option<FrameTick>) {
         if self.fullscreen_hidden {
             // Nothing is drawn, but timers, chimes and commands keep working.
             // Glass stops copying the screen: nobody sees the island.
@@ -2640,7 +2265,7 @@ impl App {
             self.glass.sync(false, self.hwnd, &self.sink, self.monitor.handle, off, &mut self.gfx);
             self.refresh_time();
             self.tick();
-            self.run_commands(deferred);
+            self.run_commands();
             self.clock.set_active(false);
             self.motion = None;
             self.schedule_wake();
@@ -2718,7 +2343,12 @@ impl App {
         let dt = dt.clamp(0.0, 0.05) as f32;
         self.set_stats(self.mode == Mode::Expanded(PageKind::Today));
         self.set_sysmon(self.mode == Mode::Expanded(PageKind::System));
-        self.set_oyenza_watch(self.mode == Mode::Expanded(PageKind::Oyenza));
+        // The Agenda page asks Outlook again as it opens (unless it just did).
+        let agenda_shown = self.mode == Mode::Expanded(PageKind::Agenda);
+        if agenda_shown && !self.agenda_shown {
+            self.ask_agenda(AGENDA_OPEN_S);
+        }
+        self.agenda_shown = agenda_shown;
         // The Pill theme floats the island below the top edge.
         self.island.set_floating(pill::on(self.st.settings.theme).then_some(pill::TOP_GAP));
         self.island.step(dt, now);
@@ -2955,7 +2585,7 @@ impl App {
             Some(false) => self.blur_text(),
             None => {}
         }
-        self.run_commands(deferred);
+        self.run_commands();
 
         // Decide whether to keep the frame clock running. Real motion runs
         // at the display's full refresh rate; ambient motion runs on every
@@ -3095,8 +2725,7 @@ impl App {
             consider(t);
         }
         if let Mode::Expanded(p) = self.mode {
-            // A page's own changes rest while nobody is at the PC (the Prayer
-            // page's countdown ticks every second); the lock and display
+            // A page's own changes rest while nobody is at the PC; the lock and display
             // events ask for a frame, which picks them up again.
             let away = self.locked || self.display_off;
             if let Some(t) = pages::next_wake(p, &self.st).filter(|_| visible && !away) {
@@ -3123,30 +2752,13 @@ impl App {
     /// then show a check mark in the pill briefly before the notice leaves.
     fn run_inline_action(&mut self, a: InlineAction) {
         self.refresh_time();
-        if a == InlineAction::StopAdzan {
-            self.adzan.stop();
-            self.st.prayer.adzan = false;
-        }
         let st = &mut self.st;
         // Already done: the check mark is showing.
         if st.notice.as_ref().is_none_or(|n| n.icon == Icon::Check) {
             return;
         }
-        if a == InlineAction::ShowAmount {
-            // The sum and sender take the subtitle's place for a few seconds; the
-            // pill turns into a check (activities.rs inline_done).
-            let until = st.now + oyenza::SHOWN_S;
-            if let Some(n) = st.notice.as_mut() {
-                if let Some(text) = n.reveal.take() {
-                    n.subtitle = text;
-                    n.until = n.until.max(until);
-                }
-            }
-            return;
-        }
         match a {
             InlineAction::StartFocus => st.pomodoro.start(st.now),
-            InlineAction::ShowAmount | InlineAction::StopAdzan => {}
         }
         let until = st.now + INLINE_DONE_S;
         if let Some(n) = st.notice.as_mut() {
@@ -3154,179 +2766,6 @@ impl App {
             n.until = until;
         }
         pinfo!("notice: inline action {a:?} done");
-    }
-
-    // ------------------------------------------------------------ prayer times
-
-    /// Prayer times' files are in place: read its places, settle the place,
-    /// and ask where the PC is when following the location.
-    fn prayer_ready(&mut self) {
-        let a = &poni_core::addons::PRAYER_TIMES;
-        let path = paths::addons_dir().join(a.id).join(a.tag).join("places.json");
-        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| PlaceList::parse(&t)) {
-            Ok(list) => {
-                pinfo!("prayer: {} places", list.places.len());
-                self.st.prayer.places = Some(std::sync::Arc::new(list));
-            }
-            Err(e) => {
-                pwarn!("prayer: can't read the places ({e})");
-                return;
-            }
-        }
-        self.resolve_prayer_place();
-        if self.st.settings.prayer.follow_location {
-            self.locate();
-        }
-    }
-
-    /// Prayer times switched off: nothing plays, nothing is kept.
-    fn prayer_off(&mut self) {
-        self.adzan.stop();
-        self.st.prayer = PrayerState::default();
-    }
-
-    /// The place the times are for: the chosen one, or until there is one,
-    /// the one the PC's time zone suggests.
-    fn resolve_prayer_place(&mut self) {
-        let Some(list) = self.st.prayer.places.clone() else { return };
-        let chosen = self.st.settings.prayer.place.as_deref().and_then(|id| list.find(id)).cloned();
-        let suggested = chosen.is_none();
-        let place = chosen.or_else(|| poni_core::prayer::suggested_place_id(self.utc_offset_min()).and_then(|id| list.find(id)).cloned());
-        let changed = place.as_ref().map(|p| &p.id) != self.st.prayer.place.as_ref().map(|p| &p.id);
-        self.st.prayer.place = place;
-        self.st.prayer.suggested = suggested;
-        if changed {
-            pinfo!("prayer: times for {}", self.st.prayer.place.as_ref().map_or("no place", |p| p.id.as_str()));
-            // A new place: prayer times that passed there don't ring now.
-            self.st.prayer.handled_until = Some(self.st.prayer_now());
-        }
-    }
-
-    /// The PC's UTC offset in minutes, from its clock.
-    fn utc_offset_min(&self) -> i32 {
-        let l = &self.st.local;
-        let local = poni_core::datetime::days_from_civil(l.year, l.month, l.day) * 86_400 + l.hour as i64 * 3600 + l.minute as i64 * 60 + l.second as i64;
-        (((local - self.st.unix) as f64 / 900.0).round() * 15.0) as i32
-    }
-
-    /// Ask Windows where the PC is (the answer: `AppEvent::Located`).
-    fn locate(&mut self) {
-        if self.st.prayer.locate == Locate::Asking || self.selftest.is_some() {
-            return;
-        }
-        self.st.prayer.locate = Locate::Asking;
-        self.st.prayer.located_at = Some(self.st.unix);
-        services::location::locate(self.sink.clone());
-    }
-
-    /// The nearest listed place becomes the place, while following the
-    /// location. The point itself is dropped here.
-    fn on_located(&mut self, found: services::location::Located) {
-        use services::location::Located;
-        self.st.prayer.locate = match found {
-            Located::Denied => Locate::Denied,
-            Located::Unknown => Locate::Unknown,
-            Located::At(lat, lng) => {
-                let Some(list) = self.st.prayer.places.clone() else { return };
-                let Some((place, km)) = list.nearest(lat, lng) else { return };
-                if km > poni_core::prayer::NEAREST_MAX_KM {
-                    pinfo!("prayer: the nearest listed place is {km:.0} km away");
-                    Locate::Far { km }
-                } else {
-                    if self.st.settings.prayer.follow_location && self.st.settings.prayer.place.as_deref() != Some(place.id.as_str()) {
-                        self.st.settings.prayer.place = Some(place.id.clone());
-                        self.st.cmd(Command::SaveSettings);
-                    }
-                    Locate::Found { km }
-                }
-            }
-        };
-    }
-
-    /// Each frame (and each minute): the prayer times that just came, and
-    /// asking where the PC is again every 3 hours while following it.
-    fn prayer_tick(&mut self) {
-        if !self.st.prayer_on() {
-            return;
-        }
-        if self.st.settings.prayer.follow_location && self.st.prayer.located_at.is_none_or(|t| self.st.unix - t >= 3 * 3600) {
-            self.locate();
-        }
-        let Some(site) = self.st.prayer.site() else { return };
-        let now = self.st.prayer_now();
-        let Some(from) = self.st.prayer.handled_until else {
-            self.st.prayer.handled_until = Some(now);
-            return;
-        };
-        if now <= from {
-            return;
-        }
-        self.st.prayer.handled_until = Some(now);
-        for m in poni_core::prayer::prayers_between(&site, from, now) {
-            match poni_core::prayer::due(m.at, now) {
-                Due::Ring => self.prayer_moment(m, true),
-                Due::Quiet => self.prayer_moment(m, false),
-                Due::Skip => {}
-            }
-        }
-    }
-
-    /// A prayer's time came: the island says so and plays the chosen sound.
-    /// Quiet when it's late (after a sleep) or a full-screen app hides the island.
-    fn prayer_moment(&mut self, m: PrayerMoment, ring: bool) {
-        let Some(site) = self.st.prayer.site() else { return };
-        let place = self.st.prayer.place.as_ref().map_or(String::new(), |p| p.label.clone());
-        let quiet = !ring || self.fullscreen_hidden;
-        let sound = if quiet { PrayerSound::Silent } else { self.st.settings.prayer.sound };
-        let mut adzan = false;
-        match sound {
-            // The recording isn't Subuh's adzan (no "ash-shalatu khairum minan naum"): Subuh gets the tone.
-            PrayerSound::Adzan if m.prayer != Prayer::Subuh => {
-                adzan = self.play_adzan();
-                if !adzan {
-                    self.st.cmd(Command::Play(crate::commands::Sound::Chime));
-                }
-            }
-            PrayerSound::Adzan | PrayerSound::Tone => self.st.cmd(Command::Play(crate::commands::Sound::Chime)),
-            PrayerSound::Silent => {}
-        }
-        let title = pages::prayer::moment_title(m.prayer);
-        let subtitle = format!("{} \u{b7} {place}", site.hhmm(m.at));
-        let secs = if adzan { 200.0 } else { 60.0 };
-        self.st.notify(Icon::Moon, self.st.accent, title, subtitle, secs, Some(NoticeAction::OpenPage(PageKind::Prayer)));
-        if adzan {
-            self.st.set_notice_inline(InlineAction::StopAdzan);
-        }
-        pinfo!("prayer: {} at {}{}", m.prayer.name(), site.hhmm(m.at), if quiet { ", quietly" } else { "" });
-    }
-
-    /// Start the adzan; music that plays pauses (and stays paused).
-    fn play_adzan(&mut self) -> bool {
-        let a = &poni_core::addons::PRAYER_TIMES;
-        let path = paths::addons_dir().join(a.id).join(a.tag).join("adzan.m4a");
-        match self.adzan.play(&path, &self.sink) {
-            Ok(()) => {
-                self.st.prayer.adzan = true;
-                if self.st.settings.prayer.pause_music && self.st.media.as_ref().is_some_and(|m| m.is_playing()) {
-                    self.st.media_cmd(MediaCmd::PlayPause);
-                }
-                true
-            }
-            Err(e) => {
-                pwarn!("prayer: the adzan didn't play ({e}); the tone instead");
-                false
-            }
-        }
-    }
-
-    fn adzan_ended(&mut self) {
-        self.adzan.stop();
-        self.st.prayer.adzan = false;
-        // The notice leaves soon after the adzan.
-        let soon = self.st.now + 4.0;
-        if let Some(n) = self.st.notice.as_mut().filter(|n| n.inline == Some(InlineAction::StopAdzan)) {
-            n.until = n.until.min(soon);
-        }
     }
 
     fn set_page(&mut self, p: PageKind) {
@@ -3346,13 +2785,10 @@ impl App {
             if self.text_focus {
                 self.blur_text();
             }
-            if p == PageKind::Oyenza {
-                self.oyenza(OyenzaCmd::Refresh);
-            }
         }
     }
 
-    fn run_commands(&mut self, deferred: &mut Vec<Deferred>) {
+    fn run_commands(&mut self) {
         let cmds = std::mem::take(&mut self.st.cmds);
         for c in cmds {
             match c {
@@ -3374,22 +2810,11 @@ impl App {
                         }
                     }
                 }
-                Command::OpenPath(p) => shell::open(&p),
-                Command::RevealPath(p) => shell::reveal(&p),
-                Command::DragOut(paths) => deferred.push(Deferred::DragOut(paths)),
-                Command::LoadThumb(p) => {
-                    if !self.st.shelf_thumbs.contains_key(&p) {
-                        self.st.shelf_thumbs.insert(p.clone(), None);
-                        services::imaging::load_thumb_async(p, self.sink.clone());
-                    }
-                }
                 Command::CopyText(t) => {
                     self.own_clip = Some(t.clone());
                     services::clipboard::set_text(self.helper, &t);
                 }
                 Command::FocusText => self.focus_text(),
-                Command::BlurText => self.blur_text(),
-                Command::RecordScreen => services::recorder::record_screen(self.hwnd),
                 Command::ScriptPaste => {
                     // Read here, not through the text field path: that one drops line breaks.
                     let text = services::clipboard::read_text(self.hwnd).map(|t| poni_core::script::clean(&t)).filter(|t| !t.is_empty());
@@ -3426,6 +2851,42 @@ impl App {
                         services::imaging::load_thumb_async(path, self.sink.clone());
                     }
                 }
+                Command::OpenPlayer => {
+                    if let Some(m) = self.st.media.clone() {
+                        let how = crate::activate::bring_forward(&m.app_id, &m.title);
+                        pinfo!("player: {} -> {how:?}", m.app_name);
+                        if how == crate::activate::Outcome::NotFound {
+                            self.st.notify(Icon::Music, palette::ORANGE, format!("Couldn't find {}", m.app_name), "Its window may be closed", 4.0, None);
+                        } else {
+                            self.collapse();
+                        }
+                    }
+                }
+                Command::AgendaPasteLink => self.paste_agenda_link(),
+                Command::AgendaRemoveLink => {
+                    pinfo!("agenda: calendar link removed");
+                    self.st.settings.agenda_link.clear();
+                    self.st.agenda = crate::state::AgendaState::default();
+                    self.st.cmd(Command::SaveSettings);
+                }
+                Command::WatchProcess { pid, name } => self.watch_process(pid, name),
+                Command::UnwatchProcess(pid) => {
+                    self.watches.remove(&pid);
+                    self.st.watched.retain(|w| w.pid != pid);
+                    pinfo!("watch: stopped waiting for {pid}");
+                }
+                Command::LaunchApp(path) => {
+                    pinfo!("dock: opening {}", poni_core::dock::display_name(&path));
+                    shell::open(&path);
+                }
+                Command::PickDockApp => self.deferred.push(Deferred::PickDockApp),
+                Command::LoadDockIcon(path) => {
+                    if !self.st.dock_icons.contains_key(&path) {
+                        self.st.dock_icons.insert(path.clone(), None);
+                        self.dock_wait.insert(path.clone());
+                        services::imaging::load_thumb_async(path, self.sink.clone());
+                    }
+                }
                 Command::SetPinned(b) => {
                     self.st.pinned = b;
                     if !b {
@@ -3434,313 +2895,123 @@ impl App {
                 }
                 Command::Collapse => self.collapse(),
                 Command::Play(s) => services::sound::play(s),
-                Command::OpenUrl(u) => shell::open(&u),
                 Command::WantStats(b) => self.set_stats(b),
                 Command::SetAutostart(on) => {
                     self.st.ui.autostart = Some(on);
                     crate::autostart::report(self.sink.clone(), Some(on));
                 }
-                Command::Phone(c) => self.phone_cmd(c),
-                Command::Pair(c) => self.pair_cmd(c),
-                Command::Oyenza(c) => self.oyenza(c),
-            }
-        }
-        self.sync_phone_offer();
-        self.sync_pair_offer();
-    }
-
-    // ------------------------------------------------------------ phone drop
-
-    /// The QR code waits for a phone, or a phone waits for an answer (Shelf
-    /// page only), or a reading is under way (Script page only).
-    fn phone_holds(&self) -> bool {
-        self.st.page_holds_island()
-    }
-
-    fn phone_cmd(&mut self, c: PhoneCmd) {
-        match c {
-            PhoneCmd::Open => self.open_phone(),
-            PhoneCmd::Close => self.close_phone(),
-            PhoneCmd::Answer { id, accept } => {
-                if let Some(svc) = &self.phone {
-                    svc.answer(id, accept);
-                }
-                let until = self.st.now + pages::shelf::PHONE_OUTCOME_S;
-                if let Some(pd) = self.st.phone.as_mut() {
-                    if let Some(a) = pd.ask.take_if(|a| a.id == id) {
-                        if accept {
-                            pd.transfer = Some(PhoneTransfer { id, from: a.from, file: 0, files: a.files.len(), done: 0, total: a.total });
-                        } else {
-                            pd.outcome = Some((format!("Declined {} from {}", files_label(a.files.len()), a.from), false, until));
-                        }
-                    }
-                }
-                self.maybe_schedule_collapse();
             }
         }
     }
 
-    fn open_phone(&mut self) {
-        if let Some(old) = self.phone.take() {
-            old.stop();
-        }
-        let mut pd = PhoneDrop::default();
-        if self.selftest.is_some() {
-            pd.error = Some("Phone drop is off in the self-test.".into());
-        } else {
-            let offer = self.st.store.shelf.paths();
-            match services::phonedrop::PhoneDrop::start(self.sink.clone(), offer.iter().map(PathBuf::from).collect()) {
-                Ok((svc, url)) => {
-                    pd.qr = QrMatrix::encode(&url);
-                    pd.url = url;
-                    self.phone_offer = offer;
-                    self.phone = Some(svc);
+    /// The Outlook agenda add-on came on (start its reader and read) or went
+    /// off (stop it and forget the meetings).
+    fn sync_agenda(&mut self) {
+        let on = self.st.agenda_reads() && self.selftest.is_none();
+        if on && self.agenda.is_none() {
+            match services::agenda::Agenda::start(self.sink.clone()) {
+                Ok(a) => {
+                    self.agenda = Some(a);
+                    self.agenda_asked = f64::NEG_INFINITY;
+                    self.ask_agenda(0.0);
                 }
-                Err(e) => {
-                    pwarn!("phone drop: {e}");
-                    pd.error = Some(e);
-                }
+                Err(e) => pwarn!("agenda: the reader didn't start ({e})"),
             }
-        }
-        self.st.phone = Some(pd);
-        self.st.page = PageKind::Shelf;
-        self.expand();
-    }
-
-    fn close_phone(&mut self) {
-        if let Some(svc) = self.phone.take() {
-            svc.stop();
-        }
-        if matches!(self.st.phone.as_ref().map(|p| &p.view), Some(PhoneView::Pairing { .. })) {
-            if let Some(s) = &self.services {
-                s.pair_cancel();
-            }
-        }
-        self.st.phone = None;
-        self.phone_offer.clear();
-        self.maybe_schedule_collapse();
-        self.request_frame();
-    }
-
-    /// Minute tick: nobody has used the link for a while, so close it.
-    fn close_idle_phone(&mut self) {
-        let idle = self.phone.as_ref().is_some_and(|svc| !svc.busy() && svc.idle_secs() >= PHONE_IDLE_S);
-        let quiet = self.st.phone.as_ref().is_some_and(|p| p.ask.is_none() && p.transfer.is_none());
-        if idle && quiet {
-            pinfo!("phone drop: closed after {:.0} minutes without a phone", PHONE_IDLE_S / 60.0);
-            self.close_phone();
+        } else if !on && self.agenda.is_some() {
+            self.agenda = None;
+            self.st.agenda = crate::state::AgendaState::default();
         }
     }
 
-    /// Keep the files a phone can save in step with the Shelf.
-    fn sync_phone_offer(&mut self) {
-        let Some(svc) = &self.phone else { return };
-        let paths = self.st.store.shelf.paths();
-        if paths != self.phone_offer {
-            svc.set_offer(paths.iter().map(PathBuf::from).collect());
-            self.phone_offer = paths;
+    /// Ask Outlook for the day's meetings, unless it was asked less than
+    /// `min_gap` seconds ago or nobody is at the PC.
+    fn ask_agenda(&mut self, min_gap: f64) {
+        let Some(a) = &self.agenda else { return };
+        if self.locked || self.display_off || self.st.now - self.agenda_asked < min_gap {
+            return;
         }
+        self.agenda_asked = self.st.now;
+        if self.st.agenda.status == crate::state::AgendaStatus::Idle {
+            self.st.agenda.status = crate::state::AgendaStatus::Reading;
+        }
+        let t = &self.st.local;
+        let day_start = poni_core::agenda::local_secs(t) - (i64::from(t.hour) * 3600 + i64::from(t.minute) * 60 + i64::from(t.second));
+        a.refresh(&self.st.settings.agenda_link, day_start);
     }
 
-    fn on_phone(&mut self, e: PhoneEvent) {
-        let now = self.st.now;
-        let until = now + pages::shelf::PHONE_OUTCOME_S;
-        let Some(pd) = self.st.phone.as_mut() else { return };
-        match e {
-            PhoneEvent::Visit { from } => {
-                pd.visitor = Some(from);
-                self.maybe_schedule_collapse();
+    /// The Agenda page's Paste link: take the clipboard's text as the
+    /// calendar's ICS link when it is one of Outlook's, and keep it out of
+    /// the clipboard history (the link opens the calendar to whoever has it).
+    fn paste_agenda_link(&mut self) {
+        let text = services::clipboard::read_text(self.hwnd).unwrap_or_default();
+        match poni_core::ics::check_link(&text) {
+            Ok(link) => {
+                let hits: Vec<usize> = self.st.clip.iter().enumerate().filter(|(_, c)| c.text.trim() == text.trim()).map(|(i, _)| i).collect();
+                for i in hits.into_iter().rev() {
+                    self.st.clip.remove(i);
+                }
+                let host = poni_core::ics::host_and_path(&link).map(|(h, _)| h).unwrap_or_default();
+                pinfo!("agenda: calendar link set ({host})");
+                self.st.settings.agenda_link = link;
+                self.st.agenda = crate::state::AgendaState::default();
+                self.st.cmd(Command::SaveSettings);
             }
-            PhoneEvent::Ask(a) => {
-                pd.outcome = None;
-                pd.visitor.get_or_insert_with(|| a.from.clone());
-                let files: Vec<(String, u64)> = a.files.iter().map(|f| (f.name.clone(), f.size)).collect();
-                pinfo!("phone drop: {} asks to send {}", a.from, files_label(files.len()));
-                pd.ask = Some(PhoneAsk { id: a.id, from: a.from.clone(), total: a.total(), files });
-                self.st.page = PageKind::Shelf;
-                self.expand();
-                self.st.chime();
-            }
-            PhoneEvent::AskEnded { id } => {
-                if let Some(a) = pd.ask.take_if(|a| a.id == id) {
-                    pd.outcome = Some((format!("{} stopped waiting", a.from), false, until));
-                }
-                self.maybe_schedule_collapse();
-            }
-            PhoneEvent::Progress { id, file, files, done, total } => match pd.transfer.as_mut() {
-                Some(t) if t.id == id => {
-                    t.file = file;
-                    t.files = files;
-                    t.done = done;
-                    t.total = total;
-                }
-                _ => {
-                    let from = pd.visitor.clone().unwrap_or_else(|| "Phone".into());
-                    pd.transfer = Some(PhoneTransfer { id, from, file, files, done, total });
-                }
-            },
-            PhoneEvent::Received { from, paths, .. } => {
-                pd.transfer = None;
-                let n = paths.len();
-                let title = format!("{} from {from} {} on the Shelf", files_label(n), if n == 1 { "is" } else { "are" });
-                pd.outcome = Some((title.clone(), true, until));
-                let added: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-                self.st.store.shelf.add_paths(&added, self.st.unix);
-                for p in added {
-                    self.st.cmds.push(Command::LoadThumb(p));
-                }
-                self.st.save();
-                pinfo!("phone drop: {} from {from}", files_label(n));
-                if !self.expanded {
-                    self.st.notify(Icon::Phone, palette::GREEN, title, "Open the Shelf to see them", 6.0, Some(NoticeAction::OpenPage(PageKind::Shelf)));
-                }
-                self.st.chime();
-                self.maybe_schedule_collapse();
-            }
-            PhoneEvent::Failed { from, reason, detail, .. } => {
-                pd.transfer = None;
-                pd.outcome = Some((format!("Nothing kept from {from}. {reason}."), false, until));
-                pwarn!("phone drop: transfer from {from} failed: {reason} {detail}");
-                self.maybe_schedule_collapse();
-            }
-        }
-    }
-
-    // ------------------------------------------------------------ paired phones
-
-    fn pair_cmd(&mut self, c: PairCmd) {
-        let now = self.st.now;
-        match c {
-            PairCmd::Begin => {
-                let r = match &self.services {
-                    Some(s) => s.pair_begin(),
-                    None => Err("Pairing is off in the self-test.".into()),
-                };
-                let Some(pd) = self.st.phone.as_mut() else { return };
-                pd.outcome = None;
-                match r {
-                    Ok(url) => {
-                        pinfo!("pair drop: showing a pairing code");
-                        pd.view = PhoneView::Pairing { qr: QrMatrix::encode(&url), url, until: now + poni_core::pairdrop::meet::PAIRING_FOR.as_secs_f64() };
-                    }
-                    Err(e) => {
-                        pwarn!("pair drop: {e}");
-                        pd.outcome = Some((e, false, now + pages::shelf::PHONE_OUTCOME_S));
-                    }
-                }
-            }
-            PairCmd::Back => {
-                if matches!(self.st.phone.as_ref().map(|p| &p.view), Some(PhoneView::Pairing { .. })) {
-                    if let Some(s) = &self.services {
-                        s.pair_cancel();
-                    }
-                }
-                if let Some(pd) = self.st.phone.as_mut() {
-                    pd.view = PhoneView::Lan;
-                }
-            }
-            PairCmd::List => {
-                if matches!(self.st.phone.as_ref().map(|p| &p.view), Some(PhoneView::Pairing { .. })) {
-                    if let Some(s) = &self.services {
-                        s.pair_cancel();
-                    }
-                }
-                if let Some(pd) = self.st.phone.as_mut() {
-                    pd.view = PhoneView::Paired;
-                }
-            }
-            PairCmd::Remove(room) => {
-                if let Some(s) = &self.services {
-                    s.pair_remove(&room);
-                }
-                if let Some(i) = self.st.paired.iter().position(|p| p.room == room) {
-                    let p = self.st.paired.remove(i);
-                    pinfo!("pair drop: removed a paired phone");
-                    if let Some(pd) = self.st.phone.as_mut() {
-                        pd.outcome = Some((format!("{} can't send to this PC any more", p.name), false, now + pages::shelf::PHONE_OUTCOME_S));
-                        pd.outcome_line = Some("Pair it again any time from Pair a phone.".into());
-                    }
-                }
-            }
+            Err(e) => self.st.agenda.note = Some((e.say(), self.st.now + 5.0)),
         }
         self.request_frame();
     }
 
-    /// Keep the files paired phones may save in step with the Shelf.
-    fn sync_pair_offer(&mut self) {
-        let Some(svc) = &self.services else { return };
-        let paths = self.st.store.shelf.paths();
-        if self.pair_offer.as_ref() != Some(&paths) {
-            svc.pair_shelf(paths.iter().map(PathBuf::from).collect());
-            self.pair_offer = Some(paths);
+    /// Start waiting for `pid` to end (the System page's bell).
+    fn watch_process(&mut self, pid: u32, name: String) {
+        if self.watches.contains_key(&pid) {
+            return;
+        }
+        match services::watch::Watch::start(pid, self.sink.clone()) {
+            Ok(w) => {
+                pinfo!("watch: waiting for {name} ({pid}) to end");
+                self.watches.insert(pid, w);
+                self.st.watched.push(crate::state::WatchedProcess { pid, name, since: self.st.now });
+            }
+            Err(e) => {
+                pwarn!("watch: can't wait for {name} ({pid}): {e}");
+                self.st.notify(Icon::Bell, palette::ORANGE, "Can't watch this one", format!("Windows won't let the island wait for {name}"), 4.0, None);
+            }
         }
     }
 
-    fn on_paired(&mut self, e: MeetEvent) {
-        let now = self.st.now;
-        let until = now + pages::shelf::PHONE_OUTCOME_S;
-        match e {
-            MeetEvent::Pairs(list) => self.st.paired = paired_phones(list),
-            MeetEvent::Server { reachable } => {
-                if self.st.pair_server.is_some() || !reachable {
-                    pinfo!("pair drop: meeting server {}", if reachable { "reachable again" } else { "unreachable" });
-                }
-                self.st.pair_server = Some(reachable);
+    /// A watched process ended: say so, with how long it ran since the bell
+    /// and, when it failed, its exit code.
+    fn on_process_exited(&mut self, pid: u32, code: Option<u32>) {
+        self.watches.remove(&pid);
+        let Some(i) = self.st.watched.iter().position(|w| w.pid == pid) else { return };
+        let w = self.st.watched.remove(i);
+        let mins = ((self.st.now - w.since) / 60.0).round() as u64;
+        let after = if mins < 1 { "under a minute after the bell".to_string() } else { format!("{mins} min after the bell") };
+        let failed = code.is_some_and(|c| c != 0);
+        let (icon, color, subtitle) = match code {
+            Some(c) if failed => (Icon::Close, palette::ORANGE, format!("Exit code {c} \u{b7} {after}")),
+            _ => (Icon::CheckCircle, palette::GREEN, after),
+        };
+        pinfo!("watch: {} ({pid}) ended, code {code:?}", w.name);
+        self.st.notify(icon, color, format!("{} finished", w.name), subtitle, 10.0, None);
+        self.st.chime();
+        self.request_frame();
+    }
+
+    /// Put what the Open dialog picked on the Dock, and say so.
+    fn add_dock_app(&mut self, path: &str) {
+        use poni_core::dock::AddError;
+        let (title, subtitle) = match self.st.store.dock.add(path) {
+            Ok(app) => {
+                pinfo!("dock: {} added", app.name);
+                ("Added to the Dock", app.name.clone())
             }
-            MeetEvent::Paired { name, .. } => {
-                pinfo!("pair drop: a phone finished pairing");
-                if let Some(pd) = self.st.phone.as_mut() {
-                    pd.view = PhoneView::Lan;
-                    pd.outcome = Some((format!("{name} is paired"), true, until));
-                    pd.outcome_line = Some("It can now send from any network, even with this panel closed.".into());
-                }
-                if !self.hovering {
-                    // The island closes now that nothing waits: say it on the pill.
-                    self.st.notify(Icon::Phone, palette::GREEN, format!("{name} is paired"), "It can send from any network now", 6.0, Some(NoticeAction::OpenPage(PageKind::Shelf)));
-                }
-                self.st.chime();
-                self.maybe_schedule_collapse();
-            }
-            MeetEvent::Phone { phone, ev, .. } => match ev {
-                PeerEvent::Hello { .. } => pinfo!("pair drop: a paired phone connected"),
-                PeerEvent::Progress { files, done: 0, .. } => {
-                    if !self.expanded {
-                        self.st.notify(Icon::Phone, palette::GREEN, format!("{phone} is sending {}", files_label(files)), "They go straight onto the Shelf", 4.0, None);
-                    }
-                }
-                PeerEvent::Progress { .. } => {}
-                PeerEvent::Received { paths } => {
-                    let n = paths.len();
-                    let title = format!("{} from {phone} {} on the Shelf", files_label(n), if n == 1 { "is" } else { "are" });
-                    let added: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-                    self.st.store.shelf.add_paths(&added, self.st.unix);
-                    for p in added {
-                        self.st.cmds.push(Command::LoadThumb(p));
-                    }
-                    self.st.save();
-                    pinfo!("pair drop: {} from a paired phone", files_label(n));
-                    if let Some(pd) = self.st.phone.as_mut() {
-                        pd.outcome = Some((title.clone(), true, until));
-                        pd.outcome_line = None;
-                    }
-                    if !self.expanded {
-                        self.st.notify(Icon::Phone, palette::GREEN, title, "Open the Shelf to see them", 6.0, Some(NoticeAction::OpenPage(PageKind::Shelf)));
-                    }
-                    self.st.chime();
-                    self.maybe_schedule_collapse();
-                }
-                PeerEvent::Failed { reason, detail } => {
-                    pwarn!("pair drop: a send from a paired phone failed: {reason} {detail}");
-                    if !self.expanded {
-                        self.st.notify(Icon::Phone, palette::TEXT, format!("Nothing kept from {phone}"), format!("{reason}."), 6.0, None);
-                    } else if let Some(pd) = self.st.phone.as_mut() {
-                        pd.outcome = Some((format!("Nothing kept from {phone}. {reason}."), false, until));
-                        pd.outcome_line = None;
-                    }
-                }
-                PeerEvent::Ended { .. } => {}
-            },
-        }
+            Err(AddError::AlreadyThere) => ("Already on the Dock", poni_core::dock::display_name(path)),
+            Err(AddError::Full) => ("The Dock is full", "Take an app off it first".to_string()),
+            Err(AddError::Empty) => return,
+        };
+        self.st.save();
+        self.st.notify(Icon::Dock, self.st.accent, title, subtitle, 3.0, Some(NoticeAction::OpenPage(PageKind::Dock)));
         self.request_frame();
     }
 
@@ -3783,19 +3054,6 @@ impl App {
     /// Self-test: what the closed island shows now, and whether it stepped aside.
     pub fn selftest_mode(&self) -> (Mode, bool) {
         (self.mode, self.st.aside)
-    }
-
-    /// Self-test only: start the real Phone drop service, fetch its page from
-    /// the network address it picked, and stop it. Returns (ok, detail).
-    pub fn selftest_phone_drop(&mut self) -> (bool, String) {
-        match services::phonedrop::PhoneDrop::start(self.sink.clone(), Vec::new()) {
-            Err(e) => (false, e),
-            Ok((svc, url)) => {
-                let r = selftest::fetch_phone_page(&url);
-                svc.stop();
-                r
-            }
-        }
     }
 
     /// At rest: outline settled, mode current, no page switch or outgoing fade.
@@ -3841,9 +3099,8 @@ impl App {
     /// of the island's canvas (island, shoulders and hit margin) and where
     /// that canvas sits on screen.
     pub fn selftest_capture(&mut self) -> (i32, i32, Vec<u8>, (i32, i32)) {
-        let mut d = Vec::new();
         self.capture_next = true;
-        self.frame(&mut d, None);
+        self.frame(None);
         let r = self.capture_rect;
         (r.right - r.left, r.bottom - r.top, self.gfx.take_capture(), (self.surface.x + r.left, self.surface.y + r.top))
     }
@@ -3895,10 +3152,10 @@ impl App {
     }
 }
 
-/// Oyen's orange in his theme, Windows' accent colour otherwise.
+/// The Light theme's amber in that theme, Windows' accent colour otherwise.
 fn theme_accent(theme: Theme) -> Color {
-    if oyen::on(theme) {
-        oyen::ORANGE
+    if theme == Theme::Light {
+        Color::hex(poni_core::look::LIGHT_ACCENT)
     } else if theme == Theme::Glass {
         services::system_accent_base().unwrap_or(palette::BLUE)
     } else {
@@ -3986,33 +3243,6 @@ fn motion_name(from: &Mode, to: &Mode) -> &'static str {
         (_, Mode::Expanded(_)) => "expand",
         (Mode::Expanded(_), _) => "collapse",
         _ => "pill",
-    }
-}
-
-/// "1 file", "3 files".
-/// The panel's list: most recently used first.
-fn paired_phones(pairs: Vec<poni_core::pairdrop::Pair>) -> Vec<PairedPhone> {
-    let mut v: Vec<PairedPhone> = pairs.into_iter().map(|p| PairedPhone { room: p.room(), name: p.name, seen: p.seen.max(p.added) }).collect();
-    v.sort_by_key(|a| std::cmp::Reverse(a.seen));
-    v
-}
-
-fn files_label(n: usize) -> String {
-    format!("{n} {}", if n == 1 { "file" } else { "files" })
-}
-
-/// The island's notice for the moment new numbers from the phone put today
-/// over the step goal (see `poni_core::health::goal_reached`).
-pub(crate) fn steps_goal_notice(steps: u32, until: f64) -> Notice {
-    Notice {
-        icon: Icon::Steps,
-        color: palette::GREEN,
-        title: format!("{} steps today", fmt_steps(steps)),
-        subtitle: "Daily step goal reached".into(),
-        until,
-        action: Some(NoticeAction::OpenPage(PageKind::Health)),
-        inline: None,
-        reveal: None,
     }
 }
 

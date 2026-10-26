@@ -460,7 +460,8 @@ impl Sampler {
         if full && self.slow_at.is_none_or(|t| t.elapsed() >= SLOW) {
             self.slow_at = Some(Instant::now());
             self.drives = fixed_drives();
-            self.route = (route_index(), super::phonedrop::route_ipv4().map(|ip| ip.to_string()));
+            let index = route_index();
+            self.route = (index, index.and_then(interface_ipv4).map(|ip| ip.to_string()));
             self.battery = battery_details();
             // A graphics card that went away, came back or was added (an external one).
             if self.gpu.is_none() {
@@ -724,9 +725,9 @@ impl Sampler {
                         .filter(|p| p.rsplit(['\\', '/']).next().is_some_and(|f| f.eq_ignore_ascii_case(&a.image)))
                         .or_else(|| windows_file(&a.image));
                     if let Some(path) = path {
-                        // Our own file's description is a whole line ("Oyenza Studio - a living notch for Windows").
+                        // Our own file's description is a whole line ("Dyna Island - a living notch for Windows").
                         let own = std::env::current_exe().is_ok_and(|exe| exe.to_string_lossy().eq_ignore_ascii_case(&path));
-                        let name = if own { "Oyenza Studio".to_string() } else { file_description(&path).unwrap_or_else(|| display_name(&a.image)) };
+                        let name = if own { "Dyna Island".to_string() } else { file_description(&path).unwrap_or_else(|| display_name(&a.image)) };
                         self.names.insert(a.image.clone(), (Some(path), name));
                     }
                 }
@@ -1644,4 +1645,35 @@ unsafe fn query_battery(h: HANDLE) -> Option<BatteryDetails> {
         d.rate_mw = Some(st.Rate);
     }
     Some(d)
+}
+
+/// The IPv4 address Windows gives interface `index` (the one the route to
+/// the internet goes through, `route_index`), read from its own address
+/// table: no socket is opened. Link-local (169.254.x.x) addresses, which a
+/// network without DHCP falls back to, come only when there is nothing else.
+fn interface_ipv4(index: u32) -> Option<std::net::Ipv4Addr> {
+    use std::net::Ipv4Addr;
+    use windows::Win32::NetworkManagement::IpHelper::{GetUnicastIpAddressTable, MIB_UNICASTIPADDRESS_TABLE};
+    use windows::Win32::Networking::WinSock::AF_INET;
+    let mut table: *mut MIB_UNICASTIPADDRESS_TABLE = std::ptr::null_mut();
+    if unsafe { GetUnicastIpAddressTable(AF_INET, &mut table) }.is_err() || table.is_null() {
+        return None;
+    }
+    // SAFETY: Windows allocated `NumEntries` rows after the header; freed below.
+    let rows = unsafe { std::slice::from_raw_parts(std::ptr::addr_of!((*table).Table).cast::<windows::Win32::NetworkManagement::IpHelper::MIB_UNICASTIPADDRESS_ROW>(), (*table).NumEntries as usize) };
+    let mut found: Option<Ipv4Addr> = None;
+    for r in rows.iter().filter(|r| r.InterfaceIndex == index) {
+        // SAFETY: the table holds IPv4 rows only (AF_INET), so `Ipv4` is the live field.
+        let ip = Ipv4Addr::from(u32::from_be(unsafe { r.Address.Ipv4.sin_addr.S_un.S_addr }));
+        if ip.is_unspecified() || ip.is_loopback() {
+            continue;
+        }
+        if !ip.is_link_local() {
+            found = Some(ip);
+            break;
+        }
+        found.get_or_insert(ip);
+    }
+    unsafe { FreeMibTable(table as *const core::ffi::c_void) };
+    found
 }

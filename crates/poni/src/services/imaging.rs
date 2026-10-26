@@ -1,14 +1,12 @@
-//! Image decoding (WIC), shell thumbnails for the Shelf and PNG export.
+//! Image decoding (WIC), shell thumbnails and icons (the System page's app
+//! icons) and PNG export.
 //!
 //! * [`decode_bytes`] runs on the caller's thread (album art, …). It joins the
 //!   multithreaded apartment when the thread has no COM apartment yet and
 //!   works inside an existing STA as well.
 //! * [`load_thumb_async`] queues work for one long-lived worker thread, an
 //!   STA because that is what shell thumbnail and icon extractors expect.
-//!   Jobs block nothing on the UI thread; the reply is `AppEvent::ShelfThumb`.
-//! * While it is at it, the worker records whether each path still exists
-//!   ([`path_kind`]), so the Shelf can grey out moved or deleted items without
-//!   touching the file system on the UI thread.
+//!   Jobs block nothing on the UI thread; the reply is `AppEvent::Thumb`.
 //! * Requests are de-duplicated per path: a path already queued or in flight
 //!   is not queued again (that job's reply answers both). Every queued job is
 //!   answered exactly once, also when the worker fails.
@@ -251,46 +249,9 @@ unsafe fn write_png(factory: &IWICImagingFactory, path: &std::path::Path, w: u32
     encoder.Commit()
 }
 
-// ---------------------------------------------------------------- path status
-
-/// What the thumbnail worker last found at a shelf path.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PathKind {
-    File,
-    Folder,
-    Missing,
-}
-
-static STATUS: LazyLock<Mutex<HashMap<String, PathKind>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-
+/// The key a path is cached and backed off under.
 fn status_key(path: &str) -> String {
     path.trim().to_lowercase()
-}
-
-/// Last known state of `path` (None until the worker has looked at it).
-/// Cheap and non-blocking enough for the UI thread: a map lookup.
-pub fn path_kind(path: &str) -> Option<PathKind> {
-    lock(&STATUS).get(&status_key(path)).copied()
-}
-
-fn set_status(key: &str, kind: PathKind) {
-    let mut map = lock(&STATUS);
-    if map.len() > 512 && !map.contains_key(key) {
-        map.clear();
-    }
-    map.insert(key.to_string(), kind);
-}
-
-/// Record `kind` only if the worker has never reported on `key`, so a path
-/// skipped during a back-off still gets a first answer (the Shelf waits for one).
-fn set_status_if_unknown(key: &str, kind: PathKind) {
-    let mut map = lock(&STATUS);
-    if !map.contains_key(key) {
-        if map.len() > 512 {
-            map.clear();
-        }
-        map.insert(key.to_string(), kind);
-    }
 }
 
 // ---------------------------------------------------------------- network back-off
@@ -478,7 +439,7 @@ impl ThumbJob {
         let Some(sink) = self.sink.take() else { return };
         let path = std::mem::take(&mut self.path);
         lock(&PENDING).remove(&path);
-        sink.send(AppEvent::ShelfThumb { path, image });
+        sink.send(AppEvent::Thumb { path, image });
     }
 }
 
@@ -490,8 +451,8 @@ impl Drop for ThumbJob {
 
 static QUEUE: Mutex<Option<Sender<ThumbJob>>> = Mutex::new(None);
 
-/// Load a thumbnail for a shelf path on a worker thread; replies with
-/// `AppEvent::ShelfThumb`. A path already queued or in flight is not queued
+/// Load a thumbnail or icon for a path on a worker thread; replies with
+/// `AppEvent::Thumb`. A path already queued or in flight is not queued
 /// again: the reply to the first request answers both.
 pub fn load_thumb_async(path: String, sink: EventSink) {
     if !lock(&PENDING).insert(path.clone()) {
@@ -500,7 +461,6 @@ pub fn load_thumb_async(path: String, sink: EventSink) {
     let mut job = ThumbJob { path, sink: Some(sink) };
     if net_blocked(&job.path) {
         // A recent network failure: answer without touching the share.
-        set_status_if_unknown(&status_key(&job.path), PathKind::Missing);
         job.reply(None);
         return;
     }
@@ -536,7 +496,6 @@ fn thumb_worker(rx: Receiver<ThumbJob>) {
     while let Ok(job) = rx.recv() {
         let image = if net_blocked(&job.path) {
             // Its share failed while this job waited in the queue.
-            set_status_if_unknown(&status_key(&job.path), PathKind::Missing);
             None
         } else {
             worker.thumbnail(&job.path)
@@ -596,7 +555,6 @@ impl ThumbWorker {
         let meta = match std::fs::metadata(path) {
             Ok(m) => m,
             Err(e) => {
-                set_status(&key, PathKind::Missing);
                 self.cache.remove(&key);
                 if let Some(root) = &net {
                     note_net_failure(&key, root, e.raw_os_error().map(|c| c as u32), started.elapsed());
@@ -605,7 +563,6 @@ impl ThumbWorker {
             }
         };
         let is_dir = meta.is_dir();
-        set_status(&key, if is_dir { PathKind::Folder } else { PathKind::File });
 
         self.tick += 1;
         let stamp = (meta.modified().ok(), meta.len());
@@ -633,7 +590,7 @@ impl ThumbWorker {
                 Some(image)
             }
             Err(e) => {
-                crate::pinfo!("no thumbnail for {}: {e}", poni_core::shelf::display_name(path));
+                crate::pinfo!("no thumbnail for {}: {e}", std::path::Path::new(path).file_name().map_or(std::borrow::Cow::Borrowed(path), |n| n.to_string_lossy()));
                 if let Some(root) = &net {
                     note_net_failure(&key, root, win32_code(e.code()), started.elapsed());
                 }

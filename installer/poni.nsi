@@ -1,6 +1,6 @@
-; Oyenza Studio installer (NSIS 3). Per-user install, no admin rights needed.
+; Dyna Island installer (NSIS 3). Per-user install, no admin rights needed.
 ;
-; The name shown to people is "Oyenza Studio" (the 0.1.x versions from 0.1.2 on said "Oyen Poni"); the install folder,
+; The name shown to people is "Dyna Island"; the install folder,
 ; the uninstall key, the Run value and poni.exe keep the name "Poni", so older installs upgrade in place.
 ;
 ; Build (Linux/macOS/Windows with makensis):
@@ -11,9 +11,9 @@
 Target amd64-unicode
 SetCompressor /SOLID lzma
 
-!define APPNAME "Oyenza Studio"
+!define APPNAME "Dyna Island"
 !define VERSION "0.2.4"
-!define PUBLISHER "Jatevo Labs"
+!define PUBLISHER "Dyna Island"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Poni"
 !define RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -25,7 +25,7 @@ SetCompressor /SOLID lzma
 !endif
 
 Name "${APPNAME}"
-OutFile "${OUTDIR}/Oyenza-Studio-Setup-${VERSION}.exe"
+OutFile "${OUTDIR}/Dyna-Island-Setup-${VERSION}.exe"
 RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\Programs\Poni"
 InstallDirRegKey HKCU "Software\Poni" "InstallDir"
@@ -34,7 +34,7 @@ BrandingText "${APPNAME} ${VERSION}"
 VIProductVersion "0.2.4.0"
 VIAddVersionKey "ProductName" "${APPNAME}"
 VIAddVersionKey "CompanyName" "${PUBLISHER}"
-VIAddVersionKey "FileDescription" "Oyenza Studio installer"
+VIAddVersionKey "FileDescription" "Dyna Island installer"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}"
@@ -64,7 +64,7 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}"
 !macroend
 !define MUI_ICON "../crates/poni/res/poni.ico"
 !define MUI_UNICON "../crates/poni/res/poni.ico"
-; Oyen hanging from the island on the welcome and finish pages, Poni's logo in the header (tools/make_brand.py).
+; The island on the welcome and finish pages, the icon in the header (tools/make_icon.py).
 !define MUI_WELCOMEFINISHPAGE_BITMAP "art/nsis-welcome.bmp"
 !define MUI_HEADERIMAGE
 !define MUI_HEADERIMAGE_RIGHT
@@ -72,9 +72,9 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}"
 !define MUI_ABORTWARNING
 !define MUI_COMPONENTSPAGE_SMALLDESC
 !define MUI_FINISHPAGE_RUN "$INSTDIR\poni.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Launch Oyenza Studio now"
-!define MUI_WELCOMEPAGE_TITLE "Welcome to Oyenza Studio"
-!define MUI_WELCOMEPAGE_TEXT "Oyenza Studio puts a living notch at the top of your screen: music with synced lyrics, a focus timer, your steps, a file shelf, tasks, clipboard history and more.$\r$\n$\r$\nIt installs just for you and doesn't need administrator rights."
+!define MUI_FINISHPAGE_RUN_TEXT "Launch Dyna Island now"
+!define MUI_WELCOMEPAGE_TITLE "Welcome to Dyna Island"
+!define MUI_WELCOMEPAGE_TEXT "Dyna Island puts a living notch at the top of your screen: music controls, a focus timer, tasks, notes, a dock for your apps, your agenda and more.$\r$\n$\r$\nIt installs just for you and doesn't need administrator rights."
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_COMPONENTS
@@ -84,18 +84,15 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
-Section "Oyenza Studio" SecMain
+Section "Dyna Island" SecMain
   SectionIn RO
   ; Close a running copy so the exe can be replaced.
   !insertmacro StopPoni
   SetOutPath "$INSTDIR"
   File "/oname=poni.exe" "${EXE}"
-  ; The licenses of what poni.exe is built from (mecab-ipadic asks for its notice in every copy).
+  ; The licenses of what poni.exe is built from.
   File "../THIRD-PARTY-NOTICES.txt"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  ; Older shortcuts: "Poni" (0.1.0, 0.1.1) and "Oyen Poni" (0.1.2 to the last 0.1.x).
-  Delete "$SMPROGRAMS\Poni.lnk"
-  Delete "$SMPROGRAMS\Oyen Poni.lnk"
   CreateShortcut "$SMPROGRAMS\${APPNAME}.lnk" "$INSTDIR\poni.exe" "" "$INSTDIR\poni.exe" 0
   WriteRegStr HKCU "Software\Poni" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APPNAME}"
@@ -110,14 +107,14 @@ Section "Oyenza Studio" SecMain
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" 7680
 SectionEnd
 
-Section "Start Oyenza Studio with Windows" SecAutostart
+Section "Start Dyna Island with Windows" SecAutostart
   ; Same value the app's own "Start with Windows" toggle writes.
   WriteRegStr HKCU "${RUN_KEY}" "Poni" '"$INSTDIR\poni.exe"'
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "The Oyenza Studio app and a Start Menu shortcut."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecAutostart} "Open Oyenza Studio automatically when you sign in. You can change this later from its menu."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "The Dyna Island app and a Start Menu shortcut."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecAutostart} "Open Dyna Island automatically when you sign in. You can change this later from its menu."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
@@ -127,12 +124,10 @@ Section "Uninstall"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
   Delete "$SMPROGRAMS\${APPNAME}.lnk"
-  Delete "$SMPROGRAMS\Poni.lnk"
-  Delete "$SMPROGRAMS\Oyen Poni.lnk"
   DeleteRegValue HKCU "${RUN_KEY}" "Poni"
   DeleteRegKey HKCU "${UNINST_KEY}"
   DeleteRegKey HKCU "Software\Poni"
-  ; Cache and log (lyrics lookups name the songs you played) go too.
+  ; Cache and log go too.
   RMDir /r "$LOCALAPPDATA\Poni"
   ; Your settings and data (tasks, shelf, focus history) in %APPDATA%\Poni are kept.
 SectionEnd

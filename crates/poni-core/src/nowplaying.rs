@@ -1,25 +1,11 @@
 //! Fix-ups for track metadata as players report it to Windows' media
 //! controls. The media service applies them before anything else (the
-//! artist line, the track key, the lyrics lookup) sees the track.
+//! artist line, the track key) sees the track.
 
 /// Apple Music for Windows reports "Artist — Album" as the artist (an em dash
 /// between spaces) and leaves the album empty. Radio adds a third part
 /// ("Artist — Album — Station").
 const APPLE_MUSIC_SEPARATOR: &str = " \u{2014} ";
-
-/// Apple Music for Windows reports its position about half a second behind
-/// what you hear, and unevenly (Lyricify's own docs give -400 to -500 ms for
-/// it). Synced lyrics run this much ahead of its reports.
-pub const APPLE_MUSIC_LYRICS_LEAD_S: f64 = 0.45;
-
-/// How far ahead of the player's reported position synced lyrics should run.
-pub fn lyrics_lead_s(app_id: &str) -> f64 {
-    if is_apple_music(app_id) {
-        APPLE_MUSIC_LYRICS_LEAD_S
-    } else {
-        0.0
-    }
-}
 
 /// Whether `app_id` (the session's AUMID) is Apple Music for Windows: the
 /// Store app (`AppleInc.AppleMusicWin_…!App`) or `AppleMusic.exe`.
@@ -150,12 +136,6 @@ mod tests {
         assert_eq!(slider_value(0.5, 5.0, 1.0), None);
         assert_eq!(slider_value(f64::NAN, 0.0, 100.0), None);
         assert_eq!(slider_value(0.5, 0.0, f64::INFINITY), None);
-    }
-
-    #[test]
-    fn lyrics_run_ahead_of_apple_music_only() {
-        assert_eq!(lyrics_lead_s(APPLE), APPLE_MUSIC_LYRICS_LEAD_S);
-        assert_eq!(lyrics_lead_s("Spotify.exe"), 0.0);
     }
 
     #[test]

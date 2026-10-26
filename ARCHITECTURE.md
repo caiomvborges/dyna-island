@@ -1,24 +1,33 @@
-# Oyenza Studio architecture
+# Architecture
 
-Oyenza Studio is a "living notch" for Windows 10/11: a black island that hangs from the
-top-centre of the screen, shows live activities (media, timers, pop-ups) while
-collapsed, and expands on hover into pages (Music + synced lyrics, Focus,
-Health, Shelf, Tasks, Clipboard, Today, System). The Shelf's Phone drop serves a
-small web page on the local network so a phone can send files to it.
+Dyna Island, a local, Windows-only "living notch" for Windows
+10/11. A black island hangs from the top-centre of the screen, shows live
+activities while collapsed (music, the focus timer, pop-ups, notices, the
+readout over games, the next meeting) and expands on hover into pages: Music,
+Focus, Tasks, Notes, Clipboard, Today, System, Agenda (an add-on), Dock,
+Script (an add-on) and Add-ons, with Settings behind the gear.
 
-It was called Oyen Poni until 0.2.0, and plain Poni before that. The code keeps the
-old short name where people don't see it: the crates (`poni`, `poni-core`), `poni.exe`,
-its folders (`%LOCALAPPDATA%\Programs\Poni`, `%APPDATA%\Poni`), the uninstall key and
-Run value, `Local\Poni.Island`, the Mac bundle id `com.oyenza.poni` and the `PONI_*`
-variables. Changing those would break upgrades and settings, so they stay.
+**One network connection, and only when asked for.** The Outlook agenda
+add-on reads the ICS link the person pasted (`services::agenda`, WinHTTP):
+`https` on Outlook's own calendar hosts only (`poni_core::ics::check_link`),
+redirects off, nothing sent but the request, the link never logged beyond
+its host. Nothing else talks to the network: the System page reads the PC's
+address from Windows' own address table, nothing downloads, and there is no
+telemetry or update check. The only things the app hands to the shell are
+local: the settings file, the data folder, Windows' startup settings and the
+apps on the Dock.
+
+It started as a fork of Oyenza Studio (MIT; see the README's credits), which
+was called Poni inside. The code keeps that short name where people don't see it: the crates (`poni`, `poni-core`),
+`poni.exe`, its folders (`%LOCALAPPDATA%\Programs\Poni`, `%APPDATA%\Poni`), the
+uninstall key and Run value, `Local\Poni.Island` and the `PONI_*` variables.
 
 ## Crates
 
 | Crate | What | Builds on |
 |---|---|---|
-| `crates/poni-core` | Pure logic + models: geometry/colour, springs, LRC parsing, LRCLIB URL/JSON, Apple Music lyrics (web-player token, API replies, TTML), romaji under Japanese, Korean and Chinese lyrics (`romanize/`; Japanese kanji come from Windows' reading analyzer, or from Oyenza Studio's own dictionary, `romanize/ja_dict.rs` with `data/ja-readings.dic.zst`, built by `tools/make_ja_dict.py`, which both apps download as the Japanese readings add-on), player metadata fix-ups, Pomodoro, the steps snapshot Oyenza sends (`health.rs`), tasks, shelf, clipboard history, settings, JSON store, SVG path parser, Oyen's face (`oyen/`, a port of the Oyenza app's built face, checked against its Swift port by `oyen/swift_check.rs`), Phone drop (`phonedrop/`: the LAN web server, the phone page, safe file names, QR codes), add-ons (`addons.rs`: each add-on's files with their size and SHA-256, and what the Add-ons page says; `sha256.rs` checks them), prayer times (`prayer/`: Adhan's sun math ported from adhan-js, with Kemenag RI's rules for Indonesia and Umm al-Qura for Saudi Arabia, checked against Kemenag's published 2026 schedule and Oyen Umroh's engine; the place list is `addons/sholat/places.json`), the System page's arithmetic (`sysmon.rs`: CPU load, per-app usage from two process lists, the process list's binary layout, a minute of history, number formats), and the whole PC's power (`power.rs`: the Corsair HXi/RMi and MSI Ai power supplies' USB protocols, decoded from their replies, and the estimate when a PSU doesn't report). **No OS calls** beyond `std` file and socket I/O (`store`, `phonedrop`), so the server's tests run over real sockets anywhere. | any OS (`cargo test -p poni-core`) |
-| `crates/poni` | The Windows app (Win32 + Direct2D + WinRT via `windows` 0.58) | Windows only (`cargo wcheck` / `cargo wbuild` cross from macOS/Linux) |
-| `crates/poni/src/mac/` | The Mac app (AppKit + Core Graphics + Core Text via `objc2`): its own window, renderer, main loop, notch layouts and menu bar item around the same state, pages, activities and Oyen. See [The Mac app](#the-mac-app). | macOS 14+ (`cargo mcheck` type-checks it from Linux) |
+| `crates/poni-core` | Pure logic + models, no OS calls beyond `std` file I/O (`store`): geometry and colour (`geom`, `look`, `glass`, `hdr`), springs and frame timing (`spring`, `frametime`, `timeline`), player metadata fix-ups and transport rules (`nowplaying`), Pomodoro (`pomodoro`), tasks (`todo`), quick notes (`notes`), the Outlook agenda's meetings and countdown (`agenda`, in local wall-clock seconds) and the calendar file it reads (`ics`: folded lines, `VTIMEZONE` rules, all-day events, `RRULE` daily to yearly with `BYDAY`/`BYMONTHDAY`/`BYSETPOS`, `EXDATE`, changed and cancelled occurrences; and the link check), clipboard history (`cliphist`), the Dock's apps (`dock`), the Script reader (`script`), add-ons (`addons`: built-in only, what the Add-ons page says), settings and the JSON store (`settings`, `store`), dates (`datetime`), the SVG path parser (`svgpath`), the System page's arithmetic (`sysmon`: CPU load, per-app usage from two process lists, the process list's binary layout, a minute of history, number formats), frame rates over games (`frames`), and the whole PC's power (`power`: the Corsair HXi/RMi and MSI Ai power supplies' USB protocols, and the estimate when a PSU doesn't report) | any OS (`cargo test -p poni-core`) |
+| `crates/poni` | The app (Win32 + Direct2D + WinRT via `windows` 0.58) | Windows only (`cargo wcheck` / `cargo wbuild` cross from Linux) |
 
 ## Threads and data flow
 
@@ -26,11 +35,14 @@ variables. Changing those would break upgrades and settings, so they stay.
  services (own threads / COM callbacks)          UI thread (owns everything below)
  ─────────────────────────────────────          ─────────────────────────────────
  media (GSMTC)      ─┐                           App ── AppState (state.rs)
- lyrics (LRCLIB)    ─┤  EventSink.send(AppEvent)  │      ├─ pages/*      draw via Ui, push Commands
- audio (volume)     ─┼──► mpsc + PostMessage ───► │      ├─ activities  collapsed pill content
- bluetooth          ─┤     (WM_APP_EVENT)         │      └─ island       spring-animated outline
- imaging (thumbs)   ─┤                            │
- phone drop (LAN)   ─┘ on demand, while the Shelf's phone panel is open
+ audio (volume)     ─┤  EventSink.send(AppEvent)  │      ├─ pages/*      draw via Ui, push Commands
+ bluetooth          ─┼──► mpsc + PostMessage ───► │      ├─ activities  collapsed pill content
+ fullscreen/appbar  ─┤     (WM_APP_EVENT)         │      └─ island       spring-animated outline
+ clipboard          ─┤                            │
+ imaging (icons)    ─┤
+ sysmon / frames    ─┤ only while the System page or the games readout needs them
+ watch (per process)─┤ one blocked thread per bell, until that process ends
+ agenda (HTTPS)     ─┘ while the agenda add-on has a link: a read every 5 min / on the Agenda tab
  frame clock thread ── WM_APP_FRAME (display vblank, only while animating)
 ```
 
@@ -51,6 +63,9 @@ variables. Changing those would break upgrades and settings, so they stay.
   * Content that fades in or out during a morph is drawn into an offscreen
     layer and composited (`Canvas::layered`): group opacity, and its text is
     rasterised once instead of re-hinting while it scales.
+  * The Glass theme (`glass.rs`, `res/glass.hlsl`) bends and frosts a copy of
+    the screen under the window (`services::backdrop`, DXGI Desktop
+    Duplication, kept in memory only and only while that theme is on).
   * All coordinates are **DIPs** (the render target DPI = monitor DPI), in
     window space: the island body is `Island::body_rect_at(cx)`.
 * **Frame clock**: `window.rs`. A thread waits on the island display's vblank
@@ -58,9 +73,7 @@ variables. Changing those would break upgrades and settings, so they stay.
   posts `WM_APP_FRAME`. Timestamps are phase-locked to the display
   (`poni_core::frametime`), and each frame is stamped with the vblank it will
   be shown on, so every animation step is a whole number of refresh periods
-  (smooth at 60, 144 or 240 Hz). A morph that starts from rest advances one
-  refresh on its first frame. Morphs log a `motion` line (frames, fps,
-  hitches, worst gap) for the first 20, then only when frames were dropped.
+  (smooth at 60, 144 or 240 Hz).
 * **Idle = no frames**: frames are produced only while the island animates,
   a page calls `ui.request_anim()`, input arrives, or a live activity is
   showing. Real motion runs on every vblank; ambient motion on every n-th
@@ -68,24 +81,24 @@ variables. Changing those would break upgrades and settings, so they stay.
   frame clock thread is parked and one-shot timers wake the UI for the next
   visible change (countdown second, HUD expiry, minute tick). The one thing
   that reads at rest is the System page's kept minute (`system_history`, on
-  by default): a light reading a second, about 0.35 ms of CPU. It rests while
-  the session is locked or the display is off, and on battery saver
-  (`poni_core::sysmon::reads`). See "Keep it light" in AGENTS.md.
+  by default): a light reading a second. It rests while the session is locked
+  or the display is off, and on battery saver (`poni_core::sysmon::reads`).
+  See "Keep it light" in AGENTS.md.
 * **Window**: `WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`.
   It never takes focus on click; text fields temporarily drop NOACTIVATE
   (`Command::FocusText`) and give focus back afterwards.
 * **Helper window** (hidden): tray icon, AppBar registration (full-screen
   notifications), `WM_POWERBROADCAST`, `WM_CLIPBOARDUPDATE`.
-* **Step aside** (Settings › Over maximized windows, on by default): the
+* **Modal work** (the tray menu, the Dock's Open dialog) runs as
+  `app::Deferred` after the window message that asked for it, never while the
+  `App` is borrowed: those loops pump messages of their own.
+* **Step aside** (Settings › Maximized windows, on by default): the
   full-screen watcher also keeps the app windows whose top edge is at the
-  top of the island's monitor, within 8 DIPs (maximized, snapped or dragged
-  up; one placed lower keeps its title below the island), as
-  `AppEvent::TopWindows`, from the foreground and location WinEvents it
-  already listens to (no polling). Each frame the app checks whether one is
-  under where the island rests (`activities::resting_mode`'s geometry) and,
+  top of the island's monitor, within 8 DIPs, as `AppEvent::TopWindows`, from
+  the foreground and location WinEvents it already listens to (no polling).
+  Each frame the app checks whether one is under where the island rests and,
   if so, rests as `Mode::Aside`: the Hidden look's invisible strip until the
-  pointer reaches it. Pop-ups, notices and a new song's title still drop
-  down; over a full-screen app the full-screen choice decides.
+  pointer reaches it. Pop-ups, notices and a new song's title still drop down.
 
 ## Contracts
 
@@ -97,12 +110,15 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
 ```
 
 * `area` is the content rect below the header (x/y absolute in canvas DIPs);
-  its width is `settings.expanded_width - 2*PAD` (default 620 - 36 = 584).
-* Immediate mode: `ui.button(id, rect) -> Resp { hovered, pressed, clicked, rclicked, drag }`.
-  Ids from `wid("name")` / `wid_n("row", i)`; must be unique per frame.
-  A click arrives on the frame after mouse-up (the app repaints automatically).
-* Widgets: `icon_button`, `pill`, `progress_bar` (returns seek fraction),
-  `text_input` / `text_input_row` (return submitted/cancelled), `wheel_in(rect)`.
+  its width is `settings.expanded_width - 2*PAD` (default 620 - 36 = 584). The
+  window fits the tallest page (System, 256): a new page stays at or below it.
+* A page joins the header through `PageKind` in `pages/mod.rs` (its key, title,
+  icon, `content_height`, `draw`, and `tabs` when it shows only sometimes).
+* Immediate mode: `ui.button(id, rect) -> Resp { hovered, pressed, clicked }`.
+  Ids from `wid("name")` / `wid_n("row", i)`; must be unique per frame. A
+  widget registered later wins the hit test where two overlap.
+* Widgets: `icon_button`, `pill`, `progress_bar` (returns the seek),
+  `text_input_row` (returns submitted/cancelled), `wheel_in(rect)`.
 * Drawing: `ui.c` is a `Canvas`: `fill_rrect`, `stroke_rrect`, `fill_circle`,
   `ring`, `arc`, `line`, `text(s, rect, &TextStyle)`, `measure`, `image`,
   `icon(Icon, rect, color)`, `clip/unclip`, `with_alpha`.
@@ -115,32 +131,53 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
   `footnote()`, `body()`, `headline()`, `value()`, `display()`, `hero()`. Nothing below 11.
 * Buttons: `ui.pill(id, rect, label, icon, PillStyle::Utility | Neutral | Primary(c) | UtilityAccent(c))`
   at `PILL_SMALL` (28) or `PILL_REGULAR` (34) height, `PILL_GAP` 8 apart.
+* Empty pages: `pages::empty_state(ui, area, icon, title, hint)` plus one
+  primary pill under it (Script, Dock).
 * Settings (`pages/settings.rs`) has no tab (`PageKind::tabbed`): the gear right of
   the tabs opens it, and pressing it again goes back. It changes what the tray menu
   changes: settings through `Command::SaveSettings` (applied as a tray change is),
   Start with Windows through `Command::SetAutostart` (read and set off the UI thread).
-* Add-ons (`pages/addons.rs`) is the last tab, a "+" (tiles with a plus): one row
-  per add-on the app has (`pages::addons::OFFERED`: every one in
-  `poni_core::addons::ALL` on Windows, Japanese readings on the Mac) with a switch. Switching one flips
-  `settings.addons` through `Command::SaveSettings`; `App::settings_changed` tells
-  `services::addons`, which downloads the files (on) or deletes them (off) and
-  reports through `AppEvent::Addon` into `st.addons`.
-* Prayer (`pages/prayer.rs`) is a tab only while Prayer times is on (`AppState::prayer_on`):
-  the next prayer, today's times, qibla, the sound and the countdown switch, and
-  a place picker. The app (`App::prayer_*`) reads the add-on's `places.json`, asks
-  `services::location` where the PC is (nearest place, the point dropped), and
-  in `tick` turns prayer times that just passed into a notice plus the tone or
-  the adzan (`services::adzan`, WinRT MediaPlayer without media controls).
-  `activities` shows the minutes before each prayer (`Activity::Prayer`).
+* Add-ons (`pages/addons.rs`) is the last tab, a "+": one row per add-on in
+  `poni_core::addons::ALL` (the Script reader and the Outlook agenda) with a switch. Switching
+  flips `settings.addons` through `Command::SaveSettings`; `App::settings_changed`
+  sets `st.addons`. Add-ons are built in: nothing downloads.
+* Script (`pages/script.rs`) is a tab only while its add-on is on
+  (`AppState::script_on`). A `.txt` dropped on the island (`dragdrop.rs`,
+  `AppEvent::FilesDropped`) becomes the script while that page shows.
+* Notes (`pages/notes.rs`): `store.notes` (`poni_core::notes`), newest first.
+  Enter adds (`text_input_row`), a click copies (`Command::CopyText`, kept out
+  of the clipboard history), × deletes with Undo; `next_wake` covers the
+  "Copied" flash and the Undo lapsing.
+* System's bell (`pages/system.rs`, `processes`): on a hovered process row,
+  and lit on a watched one. `Command::WatchProcess` starts `services::watch`
+  for that pid; `AppEvent::ProcessExited` becomes a notice with how long it
+  ran since the bell and, when non-zero, its exit code (`App::on_process_exited`).
+* Agenda (`pages/agenda.rs`) is a tab only while the Outlook agenda add-on is
+  on (`AppState::agenda_on`). With no link it explains where Outlook.com
+  publishes one and offers Paste link (`Command::AgendaPasteLink`: the
+  clipboard's text through `ics::check_link` into `settings.agenda_link`, and
+  out of the clipboard history); with one, it shows `st.agenda` and a Remove
+  link. `App::sync_agenda` starts or stops `services::agenda` with the add-on
+  and the link, and `App::ask_agenda` reads when the link is set, each
+  `AGENDA_EVERY_S` from the minute timer while someone is at the PC, and as
+  the page opens. Offline, the meetings last read stay. `Activity::Meeting` takes the closed
+  island from `agenda::LEAD_S` before the next meeting to `NOW_S` after it
+  starts (`AppState::meeting_countdown`), ahead of music and the timer.
+* Dock (`pages/dock.rs`): tiles for `store.dock` (`poni_core::dock`, up to
+  `MAX_APPS`). A click sends `Command::LaunchApp` (`shell::open`, the same as a
+  double-click: a shortcut keeps its arguments) and collapses the island; the
+  × on a hovered tile takes the app off; Add sends `Command::PickDockApp`, which
+  runs Windows' Open dialog (`picker.rs`, shortcuts not dereferenced) as
+  deferred work and adds the pick (`App::add_dock_app`, with a notice). Icons
+  come through `Command::LoadDockIcon` into `st.dock_icons`.
 * Timed page changes (an Undo pill lapsing) report their deadline through
   `pages::next_wake` so the app wakes exactly then instead of polling.
   `st.accent` = Windows accent (lightened); `st.media_accent()` = album-art colour.
 * Continuous animation: call `ui.request_anim()` while something must move
-  every frame (lyrics scroll, progress bar while playing). Never animate idle.
+  every frame. Never animate idle.
 * Side effects: push `Command`s (`st.cmd(...)`, `st.media_cmd(...)`, `st.save()`,
   `st.chime()`, `st.notify(...)`). Never call services from pages.
-* Transient page state lives in `st.ui` (`PageUiState`); add-only requests for
-  new fields go through the lead.
+* Transient page state lives in `st.ui` (`PageUiState`).
 
 ### Services (`crates/poni/src/services/*.rs`)
 
@@ -149,6 +186,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
 * Talk to the UI only through `sink.send(AppEvent::…)` (see `events.rs`).
 * COM on worker threads: initialise with `CoInitializeEx(None, COINIT_MULTITHREADED)`.
 * WinRT async: call `.get()` only on worker threads.
+* Nothing here talks to the network but `agenda` (AGENTS.md).
 
 ### Events (`events.rs`) and commands (`commands.rs`)
 
@@ -159,35 +197,25 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
 
 | File | Owner area |
 |---|---|
-| `app.rs` | message loop, island state machine, input, timers, commands |
+| `app.rs` | message loop, island state machine, input, timers, commands, deferred modal work |
 | `activities.rs` | collapsed modes + their geometry and drawing |
-| `oyen.rs` | the Oyen theme: draws `poni_core::oyen` frames peeking over the island's edge (idle, beside the clock, in the media pill) |
-| `pill/*.rs` | the Pill theme (`Theme::Pill`, `look::PILL` with `Shape::Pill`): the island floats `pill::TOP_GAP` below the top edge (`Island::set_floating`); `shape` draws the floating outline, shadow and hit area, `motion` its springs, and one module per surface (`idle`, `status`, `media`, `lyric`, `live`, `hud`, `notice`, `expanded`, `music`) behind hooks in `activities.rs` and `pages` that fall back to Classic's drawing |
-| `gfx.rs`, `icons.rs`, `ui.rs`, `island.rs`, `window.rs` | rendering/UI foundation |
+| `pill/*.rs` | the Pill theme (`Theme::Pill`, `look::PILL` with `Shape::Pill`): the island floats `pill::TOP_GAP` below the top edge (`Island::set_floating`); `shape` draws the floating outline, shadow and hit area, `motion` its springs, and one module per surface (`idle`, `status`, `media`, `live`, `hud`, `notice`, `expanded`, `music`) behind hooks in `activities.rs` and `pages` that fall back to Classic's drawing |
+| `gfx.rs`, `glass.rs`, `icons.rs`, `ui.rs`, `island.rs`, `window.rs`, `png.rs` | rendering/UI foundation |
 | `state.rs`, `events.rs`, `commands.rs` | shared contracts |
-| `pages/*.rs` | expanded pages |
-| `services/*.rs` | media (Apple Music's own progress slider and back button through UI Automation in `applemusic_ui`: it declines both from Windows' media controls), lyrics/http, audio, bluetooth, fullscreen, clipboard, imaging, oyenza, power, sound, sysstats, phonedrop (started and stopped by the Shelf's phone panel), sysmon (the System page's readings: each second while the page is open or a game's readout shows, a light reading a second for the kept minute while it's closed; all of it rests while nobody is at the PC, the kept minute also on battery saver; while the page is open on a desktop it also loads NVML for an NVIDIA card's watts and reads a power supply that reports over USB, both closed with the page), psu (that power supply: found among the HID devices by its USB ids, read with requests only, replies matched to them), addons (add-on files: downloaded from their GitHub pre-release when an add-on is switched on, checked against the size and SHA-256 in `poni_core::addons`, deleted when it is switched off; asleep otherwise), frames (Show over games' frame count: a real-time event tracing session of the game's Present calls, only while the readout shows; the one-time OK that lets the app read it is `poni.exe --allow-fps <SID>`, run elevated) |
-| `dragdrop.rs`, `shell.rs`, `tray.rs`, `autostart.rs` | OS integration |
-| `version.rs` | which build this is for the menu's About line: the version, and from `build.rs` release, test build (commit) or local build, and the day CI built it |
-| `selftest.rs` | `poni.exe --selftest <dir>` scripted screenshots for CI |
+| `pages/*.rs` | expanded pages: `media` (Music), `focus`, `tasks`, `notes`, `clipboard`, `today`, `system`, `agenda`, `dock`, `script`, `addons`, `settings` |
+| `services/*.rs` | watch (the System page's bell: waits for a process to end), agenda (the agenda add-on: a WinHTTP GET of the pasted link, the parsed meetings moved to the PC's clock with `SystemTimeToTzSpecificLocalTime`), media (Windows' media controls; Apple Music's own progress slider and back button through UI Automation in `applemusic_ui`), audio, bluetooth, fullscreen (AppBar and top windows), clipboard, imaging (WIC decoding, shell thumbnails and app icons on one worker thread, for the System page and the Dock), backdrop (the Glass theme's screen copy), power, sound, sysstats (Today's vitals), sysmon (the System page's readings: each second while the page is open or a game's readout shows, a light reading a second for the kept minute while it's closed; all of it rests while nobody is at the PC, the kept minute also on battery saver; on a desktop with the page open it also loads NVML for an NVIDIA card's watts and reads a power supply that reports over USB), psu (that power supply over HID, read with requests only), frames (Show over games' frame count: a real-time event tracing session of the game's Present calls, only while the readout shows; the one-time OK is `poni.exe --allow-fps <SID>`, run elevated) |
+| `dragdrop.rs`, `picker.rs`, `shell.rs`, `tray.rs`, `autostart.rs`, `activate.rs` | OS integration: drops onto the island, the Open dialog, opening files and apps (validated local paths only), the tray menu, Start with Windows, and bringing the playing app forward (the Music page's player name: a Store app through `IApplicationActivationManager`, a desktop app's main window, preferring the one titled with the song) |
+| `version.rs` | which build this is, for the tray's greyed About line |
+| `selftest.rs` | `poni.exe --selftest <dir>` scripted screenshots and checks |
 
 ## Data
 
-* Settings: `%APPDATA%\Poni\settings.json` (created with defaults; tray → "Open settings file").
-* Data (tasks, shelf, focus stats): `%APPDATA%\Poni\data.json`. Drinks logged by the old Water page stay in it untouched (`water`).
-* Cache + log: `%LOCALAPPDATA%\Poni\` (`lyrics\*.json`, `poni.log`), plus the Apple Music
-  token sealed with DPAPI (`apple-music-token.bin`) and the web player's public
-  developer token (`apple-music-web.json`).
-* Phone drop: received files go to `Downloads\Oyenza Studio` (`paths::phone_inbox_dir`),
-  staged in a `.oyen-poni-incoming-<n>` folder there until every file of a send has arrived.
-* Oyenza (optional): the sign-in, this PC's own key, sealed with DPAPI
-  (`%LOCALAPPDATA%\Poni\oyenza-link.bin`; `oyenza-revoke.bin` while a sign-out
-  still has to reach the server). The worker (`services/oyenza.rs`) asks
-  api.oyenza.app on its own thread, paced by the PC's use and power, and
-  checks the tab's day list every 15 s only while the tab is on screen
-  (`App::set_oyenza_watch`, beside the System page's sampler); words,
-  parsing and cadence are in `poni_core::oyenza`, the tab in `pages/oyenza.rs`.
-* `PONI_HOME` overrides both (the self-test uses it).
+* Settings: `%APPDATA%\Poni\settings.json` (created with defaults; tray → "Open settings file"), including the agenda's calendar link.
+* Data (tasks, notes, focus stats, the Script reader's script, the Dock's apps): `%APPDATA%\Poni\data.json`.
+  The agenda's meetings are only held in memory.
+  Drinks logged by an old Water page stay in it untouched (`water`).
+* Log: `%LOCALAPPDATA%\Poni\poni.log`.
+* `PONI_HOME` overrides both folders (the self-test uses it).
 * Clipboard history is memory-only and skips content marked
   `ExcludeClipboardContentFromMonitorProcessing` / `CanIncludeInClipboardHistory=0`
   (password managers set these).
@@ -195,37 +223,14 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
 ## Building
 
 ```
-cargo test -p poni-core          # logic tests, any OS
-python3 tools/make_ja_dict.py    # rebuild the Japanese reading dictionary, fixes in tools/ja_dict_fixes.csv (--check compares)
-cargo wcheck                     # type-check the Windows app from macOS/Linux
+cargo test --workspace           # logic and app tests
+cargo build -p poni --release    # on Windows: target\release\poni.exe
+cargo wcheck                     # type-check the app from Linux
 cargo wbuild                     # cross-build target/x86_64-pc-windows-gnu/release/poni.exe (needs mingw-w64)
-cargo build -p poni --release    # on Windows (MSVC)
-cargo mcheck                     # type-check the Mac app from Linux/Windows (no linker needed)
-cargo build -p poni --release    # on a Mac: the Mac app (tools/make_mac_app.sh makes the .app and DMG)
+python3 tools/make_notices.py    # rewrite THIRD-PARTY-NOTICES.txt after changing dependencies (--check compares)
+python3 tools/make_brand.py      # redraw the icon and the installer pictures (needs Pillow)
 ```
 
-## The Mac app
-
-Built in slices (slice 1: the island, drawing, clock, timer and the menu bar
-item; music, the Shelf, clipboard history, pop-ups and Oyenza sign-in come
-later). `main.rs` builds the shared modules (`activities`, `commands`,
-`icons`, `island`, `oyen`, `pages`, `plog`, `png`, `state`, `ui`) for both
-systems and takes the platform ones from `src/mac/` by `#[path]` on macOS, so
-the Windows files are untouched.
-
-| File | What |
-|---|---|
-| `mac/gfx.rs` | `Canvas` on Core Graphics + Core Text, call for call the Windows API: sRGB colours, the theme's look, SF Pro (or the embedded Outfit), images, icons, clips, shape masks, transparency layers for fades. Also `Bitmap` (offscreen) |
-| `mac/window.rs` | A borderless, non-activating `NSPanel` above the menu bar (level 27, all Spaces), sized once for the largest island; its view draws (y down) and forwards input; a display link on the view paces frames at the screen's refresh (120 Hz on ProMotion) |
-| `mac/app.rs` | The island's behaviour, ported from `app.rs`: hover lift, dwell to open, collapse delay, morphs and cross-fades, page switches, notices, the Pomodoro, settings and data. Clicks pass through to the apps below except over the island (the app toggles the panel's `ignoresMouseEvents` from global mouse-move monitors, which need no permission) |
-| `mac/notch.rs` | The camera notch: resting islands hide inside it, live activities sit in the menu bar's line left and right of the camera, notices and the open island hang below it |
-| `mac/menubar.rs` | The menu bar item (Oyen's mark as a template image) and its menu, also on a right-click of the island |
-| `mac/render.rs` | `poni --render <dir> [--theme oyen] [--notch]`: every state with sample data as PNGs, offscreen (CI's way to look at the Mac drawing; the runners have no notch) |
-| `mac/clock.rs`, `paths.rs`, `events.rs`, `services.rs`, `dragdrop.rs` | Local time, `~/Library` folders, the event channel (drained on the main queue), the accent colour, links, clipboard, sounds |
-
-CI (`.github/workflows/mac.yml`, on `main` and `mac-*` branches) builds for
-Apple Silicon and Intel, renders every state, runs the real window through a
-few states with screenshots (`poni --smoke <dir>` writes where its window is
-and waits for each screenshot), and packages `Oyenza-Studio-<version>-mac-unsigned.dmg`
-(ad-hoc signed; Developer ID signing and notarization need the Apple secrets).
-
+Only one copy runs at a time (`Local\Poni.Island`): close the running one
+(tray → Quit) before replacing `poni.exe`. The installers are
+`installer/poni.nsi` (NSIS) and `installer/poni.iss` (Inno Setup).

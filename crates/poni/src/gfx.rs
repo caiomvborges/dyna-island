@@ -789,7 +789,7 @@ fn pick_font_family(dwrite: &IDWriteFactory) -> Vec<u16> {
 }
 
 /// Fonts shipped inside the exe: Outfit (SIL Open Font License 1.1, see
-/// `res/fonts/OFL.txt`), the Oyenza Studio website's typeface, in the four weights
+/// `res/fonts/OFL.txt`), the Dyna Island website's typeface, in the four weights
 /// the island uses.
 const EMBEDDED_FONTS: [&[u8]; 4] = [
     include_bytes!("../res/fonts/Outfit-Regular.ttf"),
@@ -1599,7 +1599,7 @@ impl<'a> Canvas<'a> {
         self.g.look
     }
 
-    /// Run `f` painting colours exactly as given, outside the theme (Oyen's
+    /// Run `f` painting colours exactly as given, outside the theme (album art's
     /// own face).
     pub fn unthemed<R>(&mut self, f: impl FnOnce(&mut Canvas<'a>) -> R) -> R {
         let prev = self.g.look;
@@ -1944,13 +1944,6 @@ impl<'a> Canvas<'a> {
 
     pub fn restore_transform(&mut self, m: Matrix3x2) {
         unsafe { self.g.rt.SetTransform(&m) };
-    }
-
-    /// Scale subsequent drawing by `s` about point `p` (on top of the current transform).
-    pub fn scale_about(&mut self, p: Point, s: f32) {
-        let prev = self.save_transform();
-        let m = Matrix3x2 { M11: s, M12: 0.0, M21: 0.0, M22: s, M31: p.x * (1.0 - s), M32: p.y * (1.0 - s) };
-        unsafe { self.g.rt.SetTransform(&(m * prev)) };
     }
 
     /// Draw `f` into an offscreen layer covering `bounds`, then composite the

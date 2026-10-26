@@ -15,7 +15,8 @@
 //! `<stem>.bak.json` and then renames the temp file over the target, so the
 //! target is always either the old or the new complete file.
 
-use crate::shelf::Shelf;
+use crate::dock::Dock;
+use crate::notes::Notes;
 use crate::todo::TaskList;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -37,15 +38,15 @@ pub struct Store {
     /// exactly as it was, so an update never throws a person's history away.
     #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub water: serde_json::Value,
-    pub shelf: Shelf,
     /// Day key → completed focus sessions.
     pub focus_sessions: BTreeMap<String, u32>,
     pub last_page: String,
-    /// Oyenza bill reminders already shown (`oyenza::notice_key`), so a bill
-    /// is reminded of once even across restarts.
-    pub oyenza_noticed: Vec<String>,
     /// The Script page's script and its pace.
     pub script: crate::script::Script,
+    /// The Dock page's apps.
+    pub dock: Dock,
+    /// The Notes page's quick notes.
+    pub notes: Notes,
 }
 
 impl Default for Store {
@@ -54,11 +55,11 @@ impl Default for Store {
             version: STORE_VERSION,
             tasks: TaskList::default(),
             water: serde_json::Value::Null,
-            shelf: Shelf::default(),
             focus_sessions: BTreeMap::new(),
             last_page: String::new(),
-            oyenza_noticed: Vec::new(),
             script: crate::script::Script::default(),
+            dock: Dock::default(),
+            notes: Notes::default(),
         }
     }
 }
@@ -231,7 +232,7 @@ pub fn save_json_atomic<T: Serialize>(path: &Path, value: &T) -> io::Result<()> 
 }
 
 /// Like [`save_json_atomic`] but keeps no `.bak.json` copy, for caches that
-/// can be rebuilt (e.g. the lyrics cache).
+/// that can be rebuilt.
 pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     write_json(path, value, false)
 }

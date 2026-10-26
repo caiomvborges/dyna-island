@@ -1,25 +1,11 @@
 //! Music, collapsed (`Activity::Media`): the album art on the left, the
-//! line being sung in the middle ([`super::lyric`]) or, when there is
-//! none, the song ("Title · artist"), the equalizer in the album's colour
-//! on the right, and a glow of that colour along the bottom edge (ref3).
-//! The pill is as wide as its text (spec 6.5): the song (up to the width
-//! the spec gives a title, 6.4), or the widest line sung so far in the
-//! track, so it settles early in a song instead of resizing at every line.
-//! The text stays centred while it does.
-//!
-//! A new track's peek (`st.ui.peek_until`): text always shows here, so the
-//! peek picks which text. The title holds the middle for the peek even
-//! while a line is being sung, then the line takes over: a track change is
-//! the moment people look up to see what's playing, and the lines have the
-//! rest of the song. Most songs open with a few bars before anyone sings,
-//! so the peek rarely holds a line back.
+//! song ("Title · artist") in the middle, the equalizer in the album's
+//! colour on the right, and a glow of that colour along the bottom edge
+//! (ref3). The pill is as wide as its text (spec 6.5), up to the width the
+//! spec gives a title (6.4). The text stays centred.
 //!
 //! Paused, the art and the text dim and the bars sink low and still; the
 //! lingering paused pill comes and goes as in Classic (`activities`).
-//!
-//! The middle ([`middle`]: the line, or the song, and the width it asks
-//! for) is shared: Classic, Oyen and Glass draw it between their own art
-//! and bars while a song has synced lyrics (`activities::draw_music`).
 
 use crate::gfx::{TextStyle, Weight};
 use crate::icons::Icon;
@@ -32,30 +18,24 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// Every collapsed pill is this tall, a capsule (spec 6.1).
 const H: f32 = 32.0;
-/// A song sung with its readings is two rows tall, the line over its
-/// reading in Latin letters (`super::lyric::reads`), in every theme.
-pub(crate) const H_READS: f32 = 46.0;
 /// The pill is its text plus this much: the art and the equalizer with
 /// their gaps, the same on both sides so the text centres (spec 6.5).
 const SIDES: f32 = 88.0;
 const MIN_W: f32 = 240.0;
 const MAX_W: f32 = 520.0;
 /// The song ("Title · artist") is held to the spec's width for a title on
-/// the collapsed pill (6.4's peek): without lyrics it rests there all song
-/// long, so it stays as compact as that; a sung line may take the full
-/// MAX_W (6.5).
+/// the collapsed pill (6.4's peek), so it stays compact all song long.
 const SONG_MAX_W: f32 = 300.0;
 /// The artist shows whole, or at least this much of it.
 const ARTIST_MIN: f32 = 64.0;
-/// Widths go in steps of this much, so lines a few DIPs apart don't each
+/// Widths go in steps of this much, so songs a few DIPs apart don't each
 /// morph the pill.
 const W_STEP: f32 = 8.0;
 /// The art: 20 DIPs, 6 in from the end (spec 6.4).
 const ART: f32 = 20.0;
 const ART_INSET: f32 = 6.0;
 const ART_R: f32 = 6.0;
-/// Text is cut this far from the art and the bars while the pill morphs
-/// (in every theme's singing pill).
+/// Text is cut this far from the art and the bars while the pill morphs.
 pub(crate) const TEXT_CLEAR: f32 = 4.0;
 /// The equalizer: 4 bars 3 wide and 2 apart, the last one 13 in from the
 /// end, 4 to 14 tall (spec 6.4).
@@ -76,12 +56,10 @@ const GLOW_ALPHA: f32 = 0.55;
 const GLOW_ROWS: usize = 30;
 /// Play and pause ease over this long: the glow, the bars, the dimming.
 const PLAY_FADE: f64 = 0.2;
-/// Paused, the art and the text are this opaque (the text in every
-/// theme's singing pill).
+/// Paused, the art and the text are this opaque.
 const PAUSED_ART: f32 = 0.55;
-pub(crate) const PAUSED_TEXT: f32 = 0.65;
-/// The title and the sung line cross-fade over this long when one takes
-/// over from the other (the peek ending, the first line after an intro).
+const PAUSED_TEXT: f32 = 0.65;
+/// A new song fades in over this long.
 const HANDOFF: f64 = 0.15;
 
 thread_local! {
@@ -93,28 +71,12 @@ thread_local! {
     /// seconds), for the play/pause ease. It starts "paused since ever", so
     /// a pill that first shows paused doesn't fade.
     static PLAYING: Cell<(bool, f64)> = const { Cell::new((false, f64::NEG_INFINITY)) };
-    /// Whether the middle showed the sung line (else the song) on the last
-    /// frame drawn, and since when, for the hand-off between the two.
-    static SUNG: Cell<(bool, f64)> = const { Cell::new((false, f64::NEG_INFINITY)) };
-    /// The track (a hash of its key) and the widest of its lines so far.
-    static WIDEST: Cell<(u64, f32)> = const { Cell::new((0, 0.0)) };
     /// The song the middle names (a hash of its words) and since when.
     static SONG: Cell<(u64, f64)> = const { Cell::new((0, f64::NEG_INFINITY)) };
 }
 
-pub fn geom(st: &AppState) -> Option<Geom> {
-    let h = height(st);
-    Some(Geom::new(fit_w(), h, h / 2.0))
-}
-
-/// How tall the music pill is: two rows while the song sings with its
-/// readings, else one.
-pub(crate) fn height(st: &AppState) -> f32 {
-    if super::lyric::reads(st) {
-        H_READS
-    } else {
-        H
-    }
+pub fn geom(_st: &AppState) -> Option<Geom> {
+    Some(Geom::new(fit_w(), H, H / 2.0))
 }
 
 pub fn draw(ui: &mut Ui, st: &mut AppState, body: Rect) -> bool {
@@ -140,17 +102,14 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, body: Rect) -> bool {
     true
 }
 
-/// The middle of a music pill, in this theme and in the others while a song
-/// sings (`activities::draw_music`): the line being sung, or the song,
-/// centred on `body` and cut to `x0..x1`, where the art and the bars (or
-/// Oyen) are. `alpha` dims it while paused. The width the text asks for is
-/// kept for [`fit_w`].
-pub(crate) fn middle(ui: &mut Ui, st: &AppState, body: Rect, x0: f32, x1: f32, alpha: f32) {
+/// The middle of the music pill: the song, centred on `body` and cut to
+/// `x0..x1`, where the art and the bars are. `alpha` dims it while paused.
+/// The width the text asks for is kept for [`fit_w`].
+fn middle(ui: &mut Ui, st: &AppState, body: Rect, x0: f32, x1: f32, alpha: f32) {
     // The text centres on the pill in a box as wide as the widest pill's
     // text, so its layout doesn't change with the pill's width on each
     // frame of a morph, cut where the art and the bars are.
-    let h = height(st);
-    let area = Rect::new(body.center().x - (MAX_W - SIDES) / 2.0, body.center().y - h / 2.0, MAX_W - SIDES, h);
+    let area = Rect::new(body.center().x - (MAX_W - SIDES) / 2.0, body.center().y - H / 2.0, MAX_W - SIDES, H);
     ui.c.clip(Rect::new(x0, body.y, (x1 - x0).max(0.0), body.h));
     let want = draw_text(ui, st, area, alpha, st.now);
     ui.c.unclip();
@@ -161,8 +120,8 @@ pub(crate) fn middle(ui: &mut Ui, st: &AppState, body: Rect, x0: f32, x1: f32, a
 }
 
 /// The music pill's width for its text, as [`middle`] last measured it
-/// (between [`MIN_W`] and [`MAX_W`]; the pill follows a frame late).
-pub(crate) fn fit_w() -> f32 {
+/// (between [`MIN_W`] and [`SONG_MAX_W`]; the pill follows a frame late).
+fn fit_w() -> f32 {
     FIT_W.get()
 }
 
@@ -174,14 +133,9 @@ pub fn is_live(st: &AppState) -> Option<bool> {
     Some(playing && !st.power.saver)
 }
 
-/// The next line and the end of the peek (the line takes over from the
-/// title), whichever comes first.
+/// The end of the peek.
 pub fn next_wake(st: &AppState) -> Option<f64> {
-    let peek = (st.ui.peek_until > st.now).then_some(st.ui.peek_until);
-    match (super::lyric::next_wake(st), peek) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
+    (st.ui.peek_until > st.now).then_some(st.ui.peek_until)
 }
 
 /// How playing the pill looks, 0 (paused) to 1 (playing), easing over
@@ -213,64 +167,11 @@ fn fit(w: f32, max: f32) -> f32 {
     (((w + SIDES) / W_STEP).ceil() * W_STEP).clamp(MIN_W, max)
 }
 
-/// Run `f` with everything it draws `a` times as opaque.
-fn faded<R>(ui: &mut Ui, a: f32, f: impl FnOnce(&mut Ui) -> R) -> R {
-    let prev = ui.c.alpha();
-    ui.c.set_alpha(prev * a);
-    let r = f(ui);
-    ui.c.set_alpha(prev);
-    r
-}
-
-/// The middle: the line being sung, or the song (dimmed by `paused_a` while
-/// paused). The two cross-fade when one takes over from the other. Returns
-/// the pill width the text needs.
-fn draw_text(ui: &mut Ui, st: &AppState, area: Rect, paused_a: f32, now: f64) -> f32 {
-    // The title holds the middle while a new track peeks. The line still
-    // draws then, unseen, so the lyric lane keeps its fade state frame to
-    // frame. A paused line dims with `paused_a`, as the song does.
-    let peeking = now < st.ui.peek_until;
-    let (was_sung, since) = SUNG.get();
-    let k = smooth(clamp01(((now - since) / HANDOFF) as f32));
-    let line_a = if was_sung && !peeking { k * paused_a } else { 0.0 };
-    let line_w = faded(ui, line_a, |ui| super::lyric::draw(ui, st, area));
-    let sung = line_w.is_some() && !peeking;
-    let since = if sung == was_sung {
-        since
-    } else {
-        SUNG.set((sung, now));
-        now
-    };
-    let k = smooth(clamp01(((now - since) / HANDOFF) as f32));
-    if k < 1.0 {
-        ui.request_anim();
-    }
+/// The middle: the song (dimmed by `paused_a` while paused). Returns the
+/// pill width the text needs.
+fn draw_text(ui: &mut Ui, st: &AppState, area: Rect, paused_a: f32, _now: f64) -> f32 {
     let song = Rect::new(area.center().x - (SONG_MAX_W - SIDES) / 2.0, area.y, SONG_MAX_W - SIDES, area.h);
-    if !sung {
-        // A line that just ended can't be drawn fading out (the lyric lane
-        // has let go of it), so the title fades in on its own.
-        return fit(draw_song(ui, st, song, paused_a * k), SONG_MAX_W);
-    }
-    if k < 1.0 {
-        draw_song(ui, st, song, paused_a * (1.0 - k));
-    }
-    // The line's width, or its reading's when that is wider.
-    line_w.map_or(FIT_W.get(), |w| fit(widest_line(st, w), MAX_W))
-}
-
-/// The widest line sung so far in this track, with one `w` wide now. The
-/// pill grows to fit a longer line and holds there, so it settles within
-/// the first verse instead of morphing at every line (a resize at the top
-/// of the screen every few seconds catches the eye, and runs at the full
-/// refresh rate while it moves).
-fn widest_line(st: &AppState, w: f32) -> f32 {
-    let mut h = DefaultHasher::new();
-    st.media.as_ref().map(|m| m.track_key.as_str()).unwrap_or_default().hash(&mut h);
-    let track = h.finish();
-    let (was, widest) = WIDEST.get();
-    let widest = if was == track { widest.max(w) } else { w };
-    WIDEST.set((track, widest));
-    widest
+    fit(draw_song(ui, st, song, paused_a), SONG_MAX_W)
 }
 
 /// "Title · artist" centred in `area`: the title semibold, the artist dim,
@@ -459,15 +360,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_width_holds_the_widest_line_until_the_track_changes() {
-        let st = playing("One");
-        assert_eq!(widest_line(&st, 180.0), 180.0);
-        assert_eq!(widest_line(&st, 240.0), 240.0, "a longer line grows the pill");
-        assert_eq!(widest_line(&st, 120.0), 240.0, "a shorter one doesn't shrink it");
-        let next = playing("Two");
-        assert_eq!(widest_line(&next, 120.0), 120.0, "a new track starts over");
-    }
 
     #[test]
     fn play_and_pause_ease_and_settle() {

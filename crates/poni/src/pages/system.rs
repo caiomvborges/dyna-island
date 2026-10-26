@@ -6,11 +6,8 @@
 //! columns: a dashboard of rings and gauges with the details under it
 //! (coloured dots name each part), the usage history with a second chart
 //! under it, and the processes using the most. Readings arrive once a second
-//! from `services::sysmon` (Windows' or the Mac's), which keeps the minute
-//! while the page is closed (on Windows, tray › Keep System page history);
-//! the page itself never asks for frames. Where macOS names a thing
-//! differently (swap, Low Power Mode, the GPU's renderer and tiler), the
-//! Mac's page says it its way.
+//! from `services::sysmon`, which keeps the minute while the page is closed
+//! (tray › Keep System page history); the page itself never asks for frames.
 //!
 //! On a desktop, Power is the whole PC's draw: its power supply's own
 //! reading when it reports over USB, else an estimate (`poni_core::power`),
@@ -57,6 +54,8 @@ const GAUGE_W: f32 = 5.0;
 const SEP_H: f32 = 20.0;
 const DETAIL_H: f32 = 20.0;
 const PROC_H: f32 = 22.0;
+/// The bell beside a process's value (tell me when it ends).
+const BELL: f32 = 18.0;
 /// The second chart under the usage history.
 const SUB_H: f32 = 56.0;
 /// One drive: its name and free space, and a bar of the space used.
@@ -67,10 +66,8 @@ const BOX_R: f32 = 6.0;
 const ICON_FILL: f32 = 0.72;
 const APP_ICON: f32 = 16.0;
 const PLACEHOLDER: &str = "–";
-/// Built for a Mac: macOS's words where they differ from Windows'.
-const MAC: bool = cfg!(target_os = "macos");
 /// What the page says of a module the system gives no reading for.
-const UNREPORTED: &str = if MAC { "macOS doesn't report this on this Mac" } else { "Windows doesn't report this on this PC" };
+const UNREPORTED: &str = "Windows doesn't report this on this PC";
 
 // Stats' colours: Windows' own time red, apps blue; performance cores indigo,
 // efficiency cores teal; reads and downloads blue, writes and uploads red.
@@ -97,7 +94,6 @@ const ENCODE_C: Color = palette::PURPLE;
 const CPU_W_C: Color = palette::ORANGE;
 const GPU_W_C: Color = palette::BLUE;
 const REST_W_C: Color = Color::white(0.42);
-const TILER_C: Color = palette::ORANGE;
 const BOX_C: Color = Color::white(0.06);
 const GRID_C: Color = Color::white(0.07);
 const RULE_C: Color = Color::white(0.12);
@@ -390,28 +386,19 @@ fn draw_gpu(ui: &mut Ui, st: &mut AppState, g: &GpuReading, h: &History, cols: &
     let (dash, rest) = cols.dash.split_top(DASH_H);
     dashboard(ui, dash, &left, &ring, &right);
     let memory = Row::plain(if g.integrated { "Shared memory" } else { "Memory" }, format!("{} / {}", fmt_bytes(g.mem_used), fmt_bytes(g.mem_total)));
-    // Apple's GPUs report their renderer (pixels) and tiler (geometry), as Stats shows them.
-    let rows = if MAC {
-        vec![Row::dot(ENGINE_3D_C, "Renderer", fmt_pct(g.engine_3d)), Row::dot(TILER_C, "Tiler", fmt_pct(g.tiler)), memory]
-    } else {
-        vec![
-            Row::dot(ENGINE_3D_C, "3D", fmt_pct(g.engine_3d)),
-            Row::dot(COPY_C, "Copy", fmt_pct(g.copy)),
-            Row::dot(DECODE_C, "Video decode", fmt_pct(g.video_decode)),
-            Row::dot(ENCODE_C, "Video encode", fmt_pct(g.video_encode)),
-            memory,
-        ]
-    };
+    let rows = vec![
+        Row::dot(ENGINE_3D_C, "3D", fmt_pct(g.engine_3d)),
+        Row::dot(COPY_C, "Copy", fmt_pct(g.copy)),
+        Row::dot(DECODE_C, "Video decode", fmt_pct(g.video_decode)),
+        Row::dot(ENCODE_C, "Video encode", fmt_pct(g.video_encode)),
+        memory,
+    ];
     details(ui, rest, "ENGINES", &rows);
 
     let (chart, sub) = history_column(ui, cols.mid, "USAGE HISTORY", "ENGINES");
     chart_box(ui, chart);
     plot(ui, &h.gpu, 1.0, accent, chart.inset(1.0, 1.0), Fill::Gradient);
-    if MAC {
-        labelled_bars(ui, sub, &[(g.engine_3d, ENGINE_3D_C, "Renderer"), (g.tiler, TILER_C, "Tiler")]);
-    } else {
-        labelled_bars(ui, sub, &[(g.engine_3d, ENGINE_3D_C, "3D"), (g.copy, COPY_C, "Copy"), (g.video_decode, DECODE_C, "Decode"), (g.video_encode, ENCODE_C, "Encode")]);
-    }
+    labelled_bars(ui, sub, &[(g.engine_3d, ENGINE_3D_C, "3D"), (g.copy, COPY_C, "Copy"), (g.video_decode, DECODE_C, "Decode"), (g.video_encode, ENCODE_C, "Encode")]);
 
     // The card itself.
     let (head, rest) = cols.top.split_top(SEP_H);
@@ -419,7 +406,7 @@ fn draw_gpu(ui: &mut Ui, st: &mut AppState, g: &GpuReading, h: &History, cols: &
     let name_st = TextStyle::footnote().weight(Weight::Semibold).wrap().top().line_spacing(1.25);
     let (name_r, rest) = rest.split_top(36.0);
     ui.c.text(&g.name, name_r.inset(0.0, 2.0), &name_st);
-    let built_in = if MAC { "Built into the chip" } else { "Built into the CPU" };
+    let built_in = "Built into the CPU";
     let mut rows = vec![Row::plain("Type", if g.integrated { built_in.into() } else { "Dedicated".into() })];
     if let Some(w) = g.power_w {
         rows.push(Row::plain("Power", fmt_w(w)));
@@ -449,12 +436,9 @@ fn draw_memory(ui: &mut Ui, st: &mut AppState, m: &MemoryReading, r: &Reading, h
     let share = |p: MemPart| parts.iter().find(|(k, _)| *k == p).map_or(0, |(_, v)| *v);
     let frac = |b: u64| if m.total == 0 { 0.0 } else { b as f32 / m.total as f32 };
     let pressure = m.pressure();
-    // macOS swaps to files it adds as it needs them: none yet is 0 MB, never off.
-    let page_label = if MAC { "Swap" } else { "Page file" };
+    let page_label = "Page file";
     let right = if m.page_total > 0 {
         Gauge { frac: Some(m.page_used as f32 / m.page_total as f32), value: compact_bytes(m.page_used), label: page_label, color: palette::YELLOW }
-    } else if MAC {
-        Gauge { frac: Some(0.0), value: compact_bytes(0), label: page_label, color: palette::YELLOW }
     } else {
         Gauge { frac: None, value: "Off".into(), label: page_label, color: palette::YELLOW }
     };
@@ -488,8 +472,7 @@ fn draw_memory(ui: &mut Ui, st: &mut AppState, m: &MemoryReading, r: &Reading, h
         .iter()
         .map(|(p, c)| (frac(share(*p)), *c))
         .collect();
-    // macOS has no commit charge to show (its gauge reads the kernel's own pressure level).
-    let committed = if m.commit_limit > 0 && !MAC { format!("Committed {} of {}", fmt_bytes(m.committed), fmt_bytes(m.commit_limit)) } else { String::new() };
+    let committed = if m.commit_limit > 0 { format!("Committed {} of {}", fmt_bytes(m.committed), fmt_bytes(m.commit_limit)) } else { String::new() };
     stacked_meter(ui, sub, &segments, &fmt_bytes(m.used), &format!("of {}", fmt_bytes(m.total)), &committed);
 
     processes(ui, st, cols.top, &r.top_memory, |a| fmt_bytes(a.memory), "");
@@ -650,7 +633,7 @@ fn draw_battery(ui: &mut Ui, b: &BatteryReading, cols: &Cols) {
         Row::plain("Source", if b.on_ac { "Power adapter".into() } else { "Battery".into() }),
         Row::plain("State", state.into()),
         Row::plain("Time left", time),
-        Row::plain(if MAC { "Low Power Mode" } else { "Battery saver" }, if b.saver { "On".into() } else { "Off".into() }),
+        Row::plain("Battery saver", if b.saver { "On".into() } else { "Off".into() }),
     ];
     details(ui, rest, "DETAILS", &rows);
 
@@ -997,14 +980,7 @@ fn draw_gauge(ui: &mut Ui, c: Point, d: f32, g: &Gauge) {
         ui.c.arc(c, radius, 0.0, f.clamp(0.0, 1.0), g.color, GAUGE_W);
     }
     let inner = d - 2.0 * GAUGE_W - 2.0;
-    let mut size = if g.value.chars().count() > 4 { 10.0 } else { 11.0 };
-    // The Mac's font runs wider than Windows': a value too wide for the ring ("307 MB") shrinks to fit it.
-    if MAC {
-        let w = ui.c.measure(&g.value, &TextStyle::new(size).weight(Weight::Semibold).tabular(), 400.0).0;
-        if w > inner - 2.0 {
-            size = (size * (inner - 2.0) / w).max(7.0);
-        }
-    }
+    let size = if g.value.chars().count() > 4 { 10.0 } else { 11.0 };
     ui.c.text(&g.value, Rect::from_center(c, inner, 16.0), &TextStyle::new(size).weight(Weight::Semibold).tabular().center());
     gauge_label(ui, c, d, g.label, palette::TEXT_DIM);
 }
@@ -1015,9 +991,8 @@ fn gauge_label(ui: &mut Ui, c: Point, d: f32, label: &str, color: Color) {
 }
 
 /// Stats' memory pressure gauge: a half circle green, yellow and red where
-/// Windows' commit charge would read normal, warning and critical (on a Mac
-/// the kernel's own level picks the zone), a needle at the pressure, and the
-/// word under it.
+/// Windows' commit charge would read normal, warning and critical, a needle
+/// at the pressure, and the word under it.
 fn pressure_gauge(ui: &mut Ui, c: Point, d: f32, p: f32) {
     if d < 20.0 {
         return;
@@ -1121,14 +1096,27 @@ fn processes(ui: &mut Ui, st: &mut AppState, r: Rect, apps: &[AppUse], value: im
         let v = value(a);
         let vw = ui.c.measure(&v, &value_st, 200.0).0;
         ui.c.text(&v, Rect::new(row.right() - vw - 2.0, row.y, vw + 2.0, row.h), &value_st);
+        // The bell: hear when it ends. Shown on a hovered row, and always on a
+        // watched one (Windows' own processes can't be waited on).
+        let bell = Rect::new(row.right() - vw - 8.0 - BELL, row.center().y - BELL / 2.0, BELL, BELL);
+        let pid = a.pid as u32;
+        let watched = st.watched.iter().any(|w| w.pid == pid);
+        let mut name_right = row.right() - vw - 8.0;
+        if a.image != "system" && pid != 0 && (watched || ui.hovered(row)) {
+            let color = if watched { st.accent } else { palette::TEXT_DIM };
+            if ui.icon_button(wid_n("system.bell", u64::from(pid)), bell, Icon::Bell, color, 12.0).clicked {
+                st.cmd(if watched { Command::UnwatchProcess(pid) } else { Command::WatchProcess { pid, name: a.name.clone() } });
+            }
+            name_right = bell.x - 4.0;
+        }
         let nx = icon.right() + 7.0;
-        ui.c.text(&a.name, Rect::new(nx, row.y, (row.right() - vw - 8.0 - nx).max(0.0), row.h), &TextStyle::footnote());
+        ui.c.text(&a.name, Rect::new(nx, row.y, (name_right - nx).max(0.0), row.h), &TextStyle::footnote());
     }
 }
 
 fn draw_app_icon(ui: &mut Ui, st: &mut AppState, a: &AppUse, r: Rect) {
     // The kernel's own entry has no file: Windows' mark stands for it.
-    if !MAC && a.image == "system" {
+    if a.image == "system" {
         ui.c.icon(Icon::Windows, r.inset(1.0, 1.0), palette::BLUE);
         return;
     }

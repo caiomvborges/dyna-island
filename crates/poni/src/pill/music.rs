@@ -5,12 +5,12 @@
 //! controls centred under it as bare glyphs.
 //!
 //! ```text
-//! ┌──────┐  SPOTIFY                    ▮▮▮▮ │  earlier line
-//! │ art  │  Title                           │  CURRENT LINE
-//! │  72  │  Artist                          │  next line
-//! └──────┘                                  │  later line
-//!  1:04  ━━━━━━━━━━━━━━──────────────  −2:17 │
-//!             ⏪       ❚❚       ⏩           │  (Lyrics: source, on hover)
+//! ┌──────┐  SPOTIFY                    ▮▮▮▮
+//! │ art  │  Title
+//! │  72  │  Artist
+//! └──────┘
+//!  1:04  ━━━━━━━━━━━━━━──────────────  −2:17
+//!             ⏪       ❚❚       ⏩
 //! ```
 //!
 //! What the player does is Classic's, exactly: the same seek path
@@ -20,23 +20,15 @@
 //! same commands, widget ids and disabled states, the art's paused shrink,
 //! and the same frames: none at rest, ambient ones while music plays, full
 //! rate only while something catches up.
-//!
-//! The synced lyrics are Classic's own column (`pages::media::draw_lyrics`
-//! with its scroll state, readings and credit), on the right as in Classic.
-//! There the card keeps Classic's height and the sung line its size with a
-//! line either side; below the player the card would have to grow by half
-//! again to show more than one line.
 
 use crate::commands::{Command, MediaCmd};
 use crate::gfx::{Image, TextStyle, Weight};
 use crate::icons::Icon;
-use crate::pages::media::{self as classic, Anim, Frame, LyricsCtx};
+use crate::pages::media::{self as classic, Anim, Frame};
 use crate::state::AppState;
 use crate::ui::{wid, Ui, WidgetId};
 use poni_core::datetime::fmt_duration;
 use poni_core::geom::{lerp, palette, Color, Point, Rect};
-use poni_core::addons;
-use poni_core::nowplaying::lyrics_lead_s;
 use poni_core::svgpath::Seg;
 
 // ---------------------------------------------------------------- layout (spec 6.7)
@@ -53,9 +45,6 @@ const ART_RADIUS: f32 = 14.0;
 /// The note on a cover-less tile.
 const TILE_ICON: f32 = 28.0;
 const GAP_ART: f32 = 14.0;
-/// The player keeps at least Classic's art, gap and middle column beside the
-/// lyrics, so the lyrics column is as wide as Classic's at every width.
-const MIN_BLOCK_W: f32 = 296.0;
 
 // Text rows, placed by where their capitals start (what ref1 and the spec
 // measure): the player's name, the title, the artist.
@@ -130,7 +119,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) -> bool {
     if !super::on(st.settings.theme) {
         return false;
     }
-    // Classic's animation state (art spring, lyrics scroll, lyric clock): one
+    // Classic's animation state (the art's spring): one
     // theme draws at a time, so the two pages share it.
     let mut a = classic::take_anim();
     let fr = a.frame(st.now, ui.c.alpha());
@@ -143,47 +132,20 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) -> bool {
     true
 }
 
-/// Where the player and the lyrics go in a content area `w` wide.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Columns {
-    /// The player's width (art, text, equalizer, progress row, controls).
-    block_w: f32,
-    /// Classic's lyrics column: its width, `None` when it doesn't show.
-    lyrics_w: Option<f32>,
-}
-
-fn columns(w: f32, lyrics_on: bool, scale: f32) -> Columns {
-    let lyr_w = (w * classic::LYRICS_SHARE).min(w - classic::GAP_LYRICS - MIN_BLOCK_W).round();
-    if lyrics_on && lyr_w >= classic::MIN_LYRICS_W {
-        Columns { block_w: classic::snap(w - lyr_w - classic::GAP_LYRICS, scale), lyrics_w: Some(lyr_w) }
-    } else {
-        Columns { block_w: w, lyrics_w: None }
-    }
-}
-
 fn draw_session(ui: &mut Ui, st: &mut AppState, area: Rect, a: &mut Anim, fr: &Frame) {
     let now = st.now;
     let accent = eq_color(st.media_accent());
-    let lyrics_on = st.settings.lyrics;
-    let pronounce = st.settings.lyrics_pronunciation;
-    let offset_s = f64::from(st.settings.lyrics_offset_ms) / 1000.0;
     let Some(m) = st.media.as_ref() else { return };
 
     let scale = ui.c.scale().max(0.5);
     let snap = |v: f32| classic::snap(v, scale);
     let (x0, y0) = (snap(area.x), snap(area.y));
-    let cols = columns(area.w, lyrics_on, scale);
-    let block = Rect::new(x0, y0, cols.block_w, H_SESSION);
+    let block = Rect::new(x0, y0, area.w, H_SESSION);
 
     let playing = m.is_playing();
     let tl = m.timeline;
     let pos = tl.position_at(now);
     let has_dur = tl.has_duration();
-    // Where the lyrics are, as in Classic: the player's position plus its
-    // known lag and the user's own shift, on a clock that rides out jumpy
-    // reports.
-    let lead = lyrics_lead_s(&m.app_id) + offset_s;
-    let lyric_pos = a.clock.tick(now, pos + lead, playing && has_dur, tl.rate);
     let mut acts: Vec<MediaCmd> = Vec::new();
     let mut anim = false;
 
@@ -205,7 +167,17 @@ fn draw_session(ui: &mut Ui, st: &mut AppState, area: Rect, a: &mut Anim, fr: &F
     let tw = (block.right() - eq_width() - GAP_EQ - tx).max(0.0);
     let source = source_label(&m.app_name, playing);
     let source_st = TextStyle::caption().weight(Weight::Semibold).color(palette::TEXT_FAINT);
-    tracked(ui, &source, row(tx, tw, y0 + SOURCE_CAP, source_st.size), &source_st);
+    // The player's name is a button: a click brings the player forward, and
+    // under the pointer it brightens with an arrow after it.
+    let source_r = row(tx, tw, y0 + SOURCE_CAP, source_st.size);
+    let name_w = (ui.c.measure(&source, &source_st, 1000.0).0 + TRACKING * source.chars().count() as f32).ceil().min(source_r.w);
+    let player = ui.button(wid("media_player"), Rect::new(source_r.x - 4.0, source_r.y - 2.0, name_w + 26.0, source_r.h + 4.0));
+    let source_st = if player.hovered { source_st.color(palette::TEXT) } else { source_st };
+    tracked(ui, &source, source_r, &source_st);
+    if player.hovered {
+        ui.c.icon(Icon::Open, Rect::new(source_r.x + name_w + 4.0, source_r.center().y - 6.0, 12.0, 12.0), palette::TEXT_DIM);
+    }
+    let open_player = player.clicked;
     let title = match m.title.trim() {
         "" => "Unknown title",
         t => t,
@@ -265,25 +237,9 @@ fn draw_session(ui: &mut Ui, st: &mut AppState, area: Rect, a: &mut Anim, fr: &F
         acts.push(MediaCmd::Next);
     }
 
-    // The lyrics: Classic's column, as Classic draws it, with its offer of
-    // the Japanese readings add-on.
-    let mut open_credit = false;
-    let mut synced_shown = false;
-    let mut get_ja_readings = false;
-    if let Some(lyr_w) = cols.lyrics_w {
-        let col = Rect::new(snap(x0 + area.w - lyr_w), y0, lyr_w, H_SESSION);
-        let offer = if pronounce && st.lyrics.wants_ja_readings { addons::ja_offer(st.addon(addons::JAPANESE_READINGS.id)) } else { None };
-        let ctx = LyricsCtx { now, pos: lyric_pos, live: playing && has_dur, can_seek: m.can_seek, scale, track_key: &m.track_key, pronounce, offer };
-        let out = classic::draw_lyrics(ui, &st.lyrics, &mut st.ui, col, a, fr, &ctx, &mut acts);
-        anim |= out.animating;
-        synced_shown = out.synced;
-        open_credit = out.open_credit;
-        get_ja_readings = out.get_ja_readings;
-    }
-
     // The equalizer dances only on the frames the page gets anyway while
     // music plays (below).
-    let drifting = playing && (has_dur || synced_shown);
+    let drifting = playing && has_dur;
     let eq = match (playing, drifting) {
         (true, true) => EqState::Dancing,
         (true, false) => EqState::Still,
@@ -291,9 +247,9 @@ fn draw_session(ui: &mut Ui, st: &mut AppState, area: Rect, a: &mut Anim, fr: &F
     };
     equalizer(ui, block.right(), y0 + EQ_CY, accent, eq, now);
 
-    // Classic's frames: full rate only while something catches up (a lyric
-    // scroll, the art's spring, the credit fading); the steady drift of the
-    // bar and the lyrics while music plays needs only ambient ones.
+    // Classic's frames: full rate only while something catches up (the art's
+    // spring); the steady drift of the bar while music plays needs only
+    // ambient ones.
     if anim {
         ui.request_anim();
     } else if drifting {
@@ -303,15 +259,8 @@ fn draw_session(ui: &mut Ui, st: &mut AppState, area: Rect, a: &mut Anim, fr: &F
     for c in acts {
         classic::push_media(st, c);
     }
-    if open_credit {
-        let url = classic::source_url(classic::lyrics_source(&st.lyrics)).to_string();
-        st.cmd(Command::OpenUrl(url));
-    }
-    // As Classic's page: the Add-ons tab's switch; the app downloads it,
-    // then reads the song again.
-    if get_ja_readings {
-        st.settings.set_addon(addons::JAPANESE_READINGS.id, true);
-        st.cmd(Command::SaveSettings);
+    if open_player {
+        st.cmd(Command::OpenPlayer);
     }
 }
 
@@ -564,20 +513,6 @@ fn rounded(pts: &[(f32, f32)], r: f32) -> Vec<Seg> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_lyrics_column_is_classics_at_every_width() {
-        for width in [480.0f32, 620.0, 760.0, 900.0] {
-            let w = width - 2.0 * crate::pages::PAD;
-            let cols = columns(w, true, 1.0);
-            // Classic: (w × share).min(w − art 104 − gap 16 − gap 20 − middle 176).
-            let classic_w = (w * classic::LYRICS_SHARE).min(w - 316.0).round();
-            assert_eq!(cols.lyrics_w, Some(classic_w), "at {width}");
-            assert!(cols.block_w >= MIN_BLOCK_W - 0.5, "player {} at {width}", cols.block_w);
-            assert!((cols.block_w + classic::GAP_LYRICS + classic_w - w).abs() <= 0.5);
-        }
-        // Lyrics off: the player takes the whole card.
-        assert_eq!(columns(584.0, false, 1.0), Columns { block_w: 584.0, lyrics_w: None });
-    }
 
     #[test]
     fn rows_start_their_capitals_where_asked() {

@@ -107,9 +107,6 @@ pub struct Resp {
     /// Held down on this widget.
     pub pressed: bool,
     pub clicked: bool,
-    pub rclicked: bool,
-    /// While pressed: distance moved since the press (DIPs).
-    pub drag: Option<(f32, f32)>,
 }
 
 /// What a seekable [`Ui::progress_bar`] did this frame (fractions 0..=1).
@@ -219,15 +216,7 @@ impl<'a, 'g> Ui<'a, 'g> {
         if clicked || rclicked {
             self.repaint = true;
         }
-        let drag = if pressed {
-            match (self.input.press_pos, self.input.mouse) {
-                (Some(a), Some(b)) => Some((b.x - a.x, b.y - a.y)),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        Resp { hovered, pressed, clicked, rclicked, drag }
+        Resp { hovered, pressed, clicked }
     }
 
     /// Invisible clickable area.
@@ -486,13 +475,5 @@ impl<'a, 'g> Ui<'a, 'g> {
             self.repaint = true;
         }
         Scrub { held, released, began }
-    }
-
-    /// Release keyboard focus (e.g. after submitting).
-    pub fn blur(&mut self) {
-        if self.input.focused.is_some() {
-            self.input.focused = None;
-            self.wants_focus = Some(false);
-        }
     }
 }

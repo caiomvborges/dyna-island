@@ -1,7 +1,6 @@
 //! The floating outline: every corner rounded (a capsule while the island
 //! rests, a card while it's open), its shadow and hairline, and where it
-//! takes the mouse. Shared by the Windows and Mac renderers: only
-//! `Canvas` calls both of them have.
+//! takes the mouse.
 
 use crate::gfx::Canvas;
 use poni_core::geom::{Color, Point, Rect};
@@ -90,7 +89,7 @@ pub fn hairline(scale: f32) -> f32 {
 /// mouse wherever a pixel isn't fully transparent, so a shadow there would
 /// swallow clicks meant for the app under it (a browser's tabs, beside and
 /// below the resting pill). It is also the renderer that pays for every
-/// pixel on the CPU. The GPU renderer, WARP included, and the Mac's draw it.
+/// pixel on the CPU. The GPU renderer, WARP included, draws it.
 pub fn draw_body(c: &mut Canvas, body: Rect, radius: f32, fill: Color, border: Option<Color>) {
     let s = c.scale();
     let body = snap(body, s);

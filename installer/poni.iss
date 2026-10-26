@@ -1,9 +1,9 @@
-; Oyenza Studio installer (Inno Setup 6.5.2+, for the PNG wizard images).
+; Dyna Island installer (Inno Setup 6.5.2+, for the PNG wizard images).
 ;
 ; Releases ship installer/poni.nsi (NSIS), which 0.1.x installs came from; CI builds this one too as a check.
 ;
 ; Build after `cargo build -p poni --release`:
-;   iscc installer\poni.iss                      -> dist\Oyenza-Studio-Setup-0.2.4.exe
+;   iscc installer\poni.iss                      -> dist\Dyna-Island-Setup-0.2.4.exe
 ;   iscc /DAppVersion=0.2.0 installer\poni.iss   (another version)
 ;
 ; Per-user install: no admin rights and no UAC prompt. The app goes to
@@ -16,10 +16,10 @@
 #ifndef ExeSource
   #define ExeSource "..\target\release\poni.exe"
 #endif
-#define AppName "Oyenza Studio"
+#define AppName "Dyna Island"
 ; Folder, data and Run value names stay "Poni" (the app and 0.1.x installs use them).
 #define AppDir "Poni"
-#define AppPublisher "Jatevo Labs"
+#define AppPublisher "Dyna Island"
 #define AppExe "poni.exe"
 ; The island window's class (crates/poni/src/window.rs), used to ask a running copy to quit.
 #define IslandClass "Poni.Island"
@@ -45,12 +45,12 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=Oyenza-Studio-Setup-{#AppVersion}
+OutputBaseFilename=Dyna-Island-Setup-{#AppVersion}
 SetupIconFile=..\crates\poni\res\poni.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 WizardStyle=modern
-; Oyen hanging from the island on the finish page, Poni's logo in the header (both from tools/make_brand.py).
+; The island on the finish page, the icon in the header (both from tools/make_icon.py).
 ; Setup picks the file closest to its image area: 100%, 150% and 200% scaling.
 WizardImageFile=art\wizard-202x386.png,art\wizard-336x643.png,art\wizard-430x824.png
 WizardSmallImageFile=art\wizard-small-58.png,art\wizard-small-77.png,art\wizard-small-97.png,art\wizard-small-116.png,art\wizard-small-124.png,art\wizard-small-143.png,art\wizard-small-159.png
@@ -70,10 +70,6 @@ Name: "autostart"; Description: "Start with Windows"; GroupDescription: "Startup
 Source: "{#ExeSource}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
-[InstallDelete]
-; The shortcut the 0.1.x versions from 0.1.2 on made, before the app was renamed Oyenza Studio.
-Type: files; Name: "{autoprograms}\Oyen Poni.lnk"
-
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "A living notch for Windows"
 
@@ -89,7 +85,7 @@ Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait pos
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM {#AppExe} /F"; Flags: runhidden waituntilterminated; RunOnceId: "StopPoni"
 
 [UninstallDelete]
-; Cache and log only (lyrics, poni.log); settings and data in %APPDATA%\Poni are kept.
+; Cache and log only (poni.log); settings and data in %APPDATA%\Poni are kept.
 Type: filesandordirs; Name: "{localappdata}\{#AppDir}"
 
 [Code]

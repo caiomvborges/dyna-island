@@ -22,13 +22,7 @@
 //! island floats below the top edge: its ground is checked inside the body,
 //! and its own checks say the gap above the body shows the screen and the
 //! shadow fades out inside the window (see `pill_checks`).
-//!
-//! PONI_SELFTEST_PRAYER_AT=HH:MM shows the Prayer page at that time of the
-//! day (the other Prayer scenes stay 8 minutes before Ashar).
-//!
-//! PONI_SELFTEST_ADDONS=download also downloads the Prayer times add-on's
-//! files from their release while the scenes run and checks each one
-//! (`addon-download`; Windows CI only, it needs github.com).
+
 
 use crate::activities::{HudTag, Mode};
 use crate::app::App;
@@ -36,24 +30,17 @@ use crate::clock;
 use crate::gfx::{Image, ImageData};
 use crate::icons::Icon;
 use crate::pages::{self, PageKind};
-use crate::paths;
 use crate::png;
 use crate::state::{
-    AppState, FpsAccess, GameState, Hud, HudKind, InlineAction, Locate, LyricsState, LyricsStatus, MediaSession, Notice, NoticeAction, OyenzaLink,
-    OyenzaState, PhoneAsk, PairedPhone, PhoneDrop, PhoneTransfer, PhoneView, PowerState, PrayerState, SysStats, VolumeState,
+    AppState, FpsAccess, GameState, Hud, HudKind, InlineAction, MediaSession, Notice, NoticeAction, PowerState, SysStats,
+    VolumeState,
 };
 use crate::ui::wid;
-use poni_core::addons::{Status as AddonStatus, JAPANESE_READINGS, PRAYER_TIMES, SCRIPT_READER};
+use poni_core::addons::{Status as AddonStatus, OUTLOOK_AGENDA, SCRIPT_READER};
 use poni_core::geom::{palette, Color, Point, Rect};
-use poni_core::health::{HealthDay, HealthSnapshot, HealthSource};
-use poni_core::lrc::{parse_lrc, Lyrics};
-use poni_core::oyenza::{Activity, Bill, Day, DayPick, Saved, Seen, Txn, WalletRef};
-use poni_core::phonedrop::QrMatrix;
-use poni_core::prayer::PlaceList;
 use poni_core::pomodoro::{Phase as PomoPhase, RunState};
 use poni_core::power::{PowerReading, PsuReading, Rail};
 use poni_core::settings::{IdleStyle, Theme};
-use poni_core::shelf::ShelfItem;
 use poni_core::frames::FrameRate;
 use poni_core::sysmon::{
     AppUse, BatteryReading, CoreKind, CoreLoad, CpuReading, DiskActivity, Drive, GpuReading, MemoryReading, Module, Monitor, NetReading, Reading,
@@ -80,9 +67,8 @@ const MIN_STEPS: u32 = 3;
 /// Seconds a scene may take to settle before it counts as a failure.
 const SETTLE_TIMEOUT: f64 = 3.0;
 /// The same on a software rasterizer (CI runners have no GPU). A fresh
-/// virtual machine can take longer to bring a scene to rest: the first open
-/// page with Japanese lyrics took 3.1-4.2 s there. Still short enough to
-/// catch an island that never settles.
+/// virtual machine can take longer to bring a scene to rest. Still short
+/// enough to catch an island that never settles.
 const SOFT_GPU_SETTLE_TIMEOUT: f64 = 8.0;
 /// Seconds to wait for a simulated tab click to switch the page.
 const CLICK_TIMEOUT: f64 = 1.5;
@@ -126,73 +112,6 @@ const ART_PX: u32 = 240;
 /// The battery in the low-battery scene (Windows warns at 20 %).
 const LOW_BATTERY: u8 = 19;
 
-/// Original placeholder lyrics written for the self-test (not from any real song).
-const LYRICS_LRC: &str = "\
-[ti:Paper Boats]
-[ar:The Lanterns]
-[00:38.00]Folded up the morning into something small
-[00:43.50]Set it on the water by the harbor wall
-[00:49.00]Ink along the edges of a name I used to know
-[00:54.50]Watched it find the current, watched it go
-[01:00.00]Paper boats, carry what I couldn't say
-[01:05.50]Over the grey and out across the bay
-[01:11.00]If the tide is gentle they will find the light
-[01:16.50]Lanterns on the pier keep burning through the night
-[01:22.00]Every little sail a letter never sent
-[01:27.50]Every little ripple something someone meant
-[01:33.00]So I fold another and I let it drift away
-[01:38.50]Paper boats, I'll meet you there someday
-";
-
-/// The same song in Japanese, Korean and Chinese (written for the test, same
-/// timings), for the pronunciation lines (PONI_SELFTEST_LYRICS=ja|ko|zh).
-const LYRICS_JA: &str = "\
-[00:38.00]朝をたたんで小さな形にした
-[00:43.50]港の壁のそばで水に浮かべた
-[00:49.00]端ににじんだインク、昔の名前
-[00:54.50]流れを見つけて、遠くへ行った
-[01:00.00]紙の舟よ、言えなかった言葉を運んで
-[01:05.50]灰色の海をこえて湾の向こうへ
-[01:11.00]潮がやさしければ光を見つける
-[01:16.50]桟橋のランタンは夜通し灯る
-[01:22.00]小さな帆はどれも出せない手紙
-[01:27.50]小さな波はどれも誰かの想い
-[01:33.00]だから また ひとつ おって ながすよ
-[01:38.50]紙の舟よ、いつかそこで会おう OK
-";
-
-const LYRICS_KO: &str = "\
-[00:38.00]아침을 접어서 작게 만들었어
-[00:43.50]항구 벽 옆에서 물 위에 띄웠어
-[00:49.00]가장자리에 번진 잉크, 옛 이름
-[00:54.50]물길을 찾아서 멀리 떠나갔어
-[01:00.00]종이배야, 못 한 말을 실어 가 줘
-[01:05.50]회색 바다를 건너 만 너머로
-[01:11.00]물결이 다정하면 빛을 찾겠지
-[01:16.50]부두의 등불은 밤새 타올라
-[01:22.00]작은 돛마다 부치지 못한 편지
-[01:27.50]작은 물결마다 누군가의 마음
-[01:33.00]그래서 또 하나 접어 흘려보내
-[01:38.50]종이배야, 언젠가 거기서 만나 Oh
-";
-
-const LYRICS_ZH: &str = "\
-[00:38.00]把清晨折成小小的形状
-[00:43.50]放在港口的墙边水面上
-[00:49.00]边缘晕开的墨水，旧日的名字
-[00:54.50]看它找到水流，看它远去
-[01:00.00]纸船啊，带走我说不出的话
-[01:05.50]越过灰色的海，驶向海湾那边
-[01:11.00]如果潮水温柔，它们会找到光
-[01:16.50]码头的灯笼彻夜燃烧
-[01:22.00]每一片小帆都是没寄出的信
-[01:27.50]每一道涟漪都是谁的心意
-[01:33.00]所以我再折一只，让它漂走
-[01:38.50]纸船啊，总有一天我们在那里相见
-";
-
-const NOTES_TXT: &str = "Weekend trip\n\n- ferry leaves at 9:40\n- pack the blue jacket\n- ask about the lighthouse tour\n";
-
 const CLIPS: [&str; 6] = [
     "Lunch: noodles from the corner place, then a walk by the river",
     "Tracking number PX-2048-7731",
@@ -203,52 +122,6 @@ const CLIPS: [&str; 6] = [
 ];
 
 const GIB: u64 = 1024 * 1024 * 1024;
-
-/// The phone-drop link in the screenshots. Made up: no server answers it.
-const PHONE_URL: &str = "HTTP://192.168.1.20:53530/K7Q2M9XWZ4R8T6YB3NPV5HJC2D/";
-
-/// The pairing link in the screenshots: the contract's test secret, so no
-/// real pair can use it.
-const PAIR_URL: &str = "https://drop.oyenza.com/p#k=AAECAwQFBgcICQoLDA0ODw";
-
-/// Paired phones as the pairing scenes show them (made up).
-fn fake_paired(scene: Scene, unix: i64) -> Vec<PairedPhone> {
-    match scene {
-        Scene::ShelfPaired | Scene::ShelfPairedPhones | Scene::PairedNotice => vec![
-            PairedPhone { room: "geDM0jEhk4eiOz_li-FtORW2YlPBbebr7NsHjLkHI_4".into(), name: "Pixel 10".into(), seen: unix - 5 * 60 },
-            PairedPhone { room: "ZmFrZS1yb29tLWZvci10aGUtc2VsZi10ZXN0LWlwaG9u".into(), name: "iPhone".into(), seen: unix - 2 * 86_400 - 3600 },
-        ],
-        _ => Vec::new(),
-    }
-}
-
-/// Phone drop as each phone scene shows it (None = closed).
-fn fake_phone(scene: Scene, now: f64) -> Option<PhoneDrop> {
-    let ready = PhoneDrop { url: PHONE_URL.into(), qr: QrMatrix::encode(PHONE_URL), ..Default::default() };
-    let files = vec![("IMG_2041.HEIC".to_string(), 2_480_112u64), ("IMG_2042.HEIC".to_string(), 2_391_870), ("Harbor walk.mov".to_string(), 18_402_331)];
-    let total = files.iter().map(|f| f.1).sum();
-    match scene {
-        Scene::ShelfPhone => Some(ready),
-        Scene::ShelfPhoneAsk => Some(PhoneDrop {
-            visitor: Some("iPhone".into()),
-            ask: Some(PhoneAsk { id: 7, from: "iPhone".into(), files, total }),
-            ..ready
-        }),
-        Scene::ShelfPhoneReceive => Some(PhoneDrop {
-            visitor: Some("iPhone".into()),
-            transfer: Some(PhoneTransfer { id: 7, from: "iPhone".into(), file: 2, files: 3, done: 9_100_000, total }),
-            ..ready
-        }),
-        Scene::ShelfPairing => Some(PhoneDrop { view: PhoneView::Pairing { url: PAIR_URL.into(), qr: QrMatrix::encode(PAIR_URL), until: now + 580.0 }, ..ready }),
-        Scene::ShelfPaired => Some(PhoneDrop {
-            outcome: Some(("Pixel 10 is paired".into(), true, now + 60.0)),
-            outcome_line: Some("It can now send from any network, even with this panel closed.".into()),
-            ..ready
-        }),
-        Scene::ShelfPairedPhones => Some(PhoneDrop { view: PhoneView::Paired, ..ready }),
-        _ => None,
-    }
-}
 
 /// Paths of the sample apps (keys for their icons only; never opened) and their tile colours.
 const SAMPLE_ICONS: [(&str, u32); 8] = [
@@ -572,184 +445,6 @@ fn fake_stats() -> SysStats {
     }
 }
 
-/// Oyenza, signed in as an example account (all made up): a week of
-/// transactions with today's newest just landed (it glows), and bills due
-/// tomorrow and later.
-fn fake_oyenza(st: &AppState, scene: Scene, now: f64) -> OyenzaState {
-    let iso = |t: i64| {
-        let (y, m, d) = poni_core::datetime::civil_from_days(t.div_euclid(86_400));
-        let s = t.rem_euclid(86_400);
-        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", s / 3600, s % 3600 / 60, s % 60)
-    };
-    // Today's rows a few minutes to hours ago, or, early in the day, spread over the time since midnight
-    // (`share` of it), so their times stay apart and in order; earlier days at set times.
-    let since_midnight = st.local.hour as i64 * 3600 + st.local.minute as i64 * 60 + st.local.second as i64;
-    let midnight = st.unix - since_midnight;
-    let ago = |minutes: i64, share: f64| iso(st.unix - (minutes * 60).min((since_midnight as f64 * share) as i64));
-    let on = |days_ago: i64, h: i64, m: i64| iso(midnight - days_ago * 86_400 + h * 3600 + m * 60);
-    let txn = |id: &str, kind: &str, title: &str, text: &str, wallet: (&str, &str), at: String, auto: bool| Txn {
-        id: id.into(),
-        kind: kind.into(),
-        title: title.into(),
-        amount: 1.0,
-        text: text.into(),
-        category: None,
-        wallet: Some(WalletRef { name: wallet.0.into(), color: wallet.1.into() }),
-        to_wallet: None,
-        at,
-        auto,
-    };
-    let (bca, gopay, ovo, cash) = (("BCA", "#0060AF"), ("GoPay", "#00AED6"), ("OVO", "#4C3494"), ("Cash", "#8E8E93"));
-    let day = |n: i64| st.local.add_days(n).day_key();
-    let mut transfer = txn("t1", "transfer", "", "Rp 500.000", bca, ago(545, 0.9), false);
-    transfer.to_wallet = Some(WalletRef { name: gopay.0.into(), color: gopay.1.into() });
-    let today = Day {
-        date: day(0),
-        count: 5,
-        in_sum: 1_250_000.0,
-        out: 152_000.0,
-        in_text: "Rp 1.250.000".into(),
-        out_text: "Rp 152.000".into(),
-        rows: vec![
-            txn("t5", "income", "Gaji Oktober", "Rp 1.250.000", bca, ago(2, 0.04), true),
-            txn("t4", "expense", "Kopi susu", "Rp 25.000", gopay, ago(33, 0.25), false),
-            txn("t3", "expense", "Grab ke rumah", "Rp 38.000", ovo, ago(128, 0.5), false),
-            txn("t2", "expense", "Tokopedia · Kabel USB-C", "Rp 89.000", bca, ago(427, 0.75), true),
-            transfer,
-        ],
-    };
-    let yesterday = Day {
-        date: day(-1),
-        count: 4,
-        in_sum: 200_000.0,
-        out: 395_000.0,
-        in_text: "Rp 200.000".into(),
-        out_text: "Rp 395.000".into(),
-        rows: vec![
-            txn("y4", "expense", "Makan siang", "Rp 40.000", gopay, on(1, 12, 40), false),
-            txn("y3", "expense", "Listrik PLN", "Rp 350.000", bca, on(1, 10, 2), true),
-            txn("y2", "income", "Uang masuk", "Rp 200.000", gopay, on(1, 9, 15), true),
-            txn("y1", "expense", "Parkir", "Rp 5.000", cash, on(1, 8, 10), false),
-        ],
-    };
-    let thursday = Day {
-        date: day(-2),
-        count: 2,
-        in_sum: 0.0,
-        out: 172_000.0,
-        in_text: "Rp 0".into(),
-        out_text: "Rp 172.000".into(),
-        rows: vec![txn("w2", "expense", "Bensin", "Rp 150.000", bca, on(2, 18, 20), false), txn("w1", "expense", "Kopi", "Rp 22.000", gopay, on(2, 8, 45), false)],
-    };
-    let empty = |n: i64| Day { date: day(-n), count: 0, in_sum: 0.0, out: 0.0, in_text: "Rp 0".into(), out_text: "Rp 0".into(), rows: Vec::new() };
-    let days = vec![today.clone(), yesterday, thursday, empty(3), empty(4), empty(5), empty(6)];
-    // Everything was on the page a while ago except today's newest, which just landed.
-    let mut seen = Seen::default();
-    let mut before = days.clone();
-    before[0].rows.remove(0);
-    seen.note(&before, now - 120.0);
-    seen.note(&days, now - 12.0);
-    let link = match scene {
-        Scene::OyenzaSignIn | Scene::SettingsSigningIn => OyenzaLink::Connecting {
-            code: "KPJX-TMNQ".into(),
-            url: "https://oyenza.app/connect?code=KPJX-TMNQ".into(),
-            // Pinned on every step, so the countdown reads 9:41 in the screenshot.
-            until: now + 581.0,
-        },
-        _ => OyenzaLink::Connected { account: "a•••@example.com".into() },
-    };
-    let bill = |kind: &str, name: &str, due: String, text: Option<&str>| Bill { kind: kind.into(), name: name.into(), due, amount: text.map(|_| 1.0), text: text.map(Into::into) };
-    OyenzaState {
-        link,
-        activity: Some(Activity { cursor: "42".into(), today: day(0), days }),
-        seen,
-        day: match scene {
-            Scene::OyenzaYesterday => DayPick::Past(1),
-            Scene::OyenzaTomorrow => DayPick::Tomorrow,
-            _ => DayPick::Today,
-        },
-        bills: vec![
-            bill("subscription", "Spotify", day(1), Some("Rp 54.990")),
-            bill("card", "Kartu Kredit BCA", day(1), None),
-            bill("subscription", "Netflix", day(5), Some("Rp 54.000")),
-            bill("subscription", "Google One", day(8), Some("Rp 26.900")),
-            bill("card", "Kartu Kredit Mandiri", day(17), None),
-        ],
-        bills_today: st.day_key(),
-        updated_unix: Some(st.unix - 8),
-        saved: (scene == Scene::OyenzaSaved).then(|| {
-            let kopi = Saved { id: "s1".into(), title: "Kopi".into(), amount: 25_000.0, text: "Rp 25.000".into(), category: Some("Makan & Minum".into()), wallet: "GoPay".into() };
-            (vec![kopi], now + 9.5)
-        }),
-        ..OyenzaState::default()
-    }
-}
-
-/// Prayer times for its scenes: on, in Kota Jakarta, its clock 8 minutes
-/// before today's Ashar (the real list arrives with the add-on's download;
-/// these few places are copied from it).
-fn seed_prayer(st: &mut AppState, scene: Scene, until: f64) {
-    let on = matches!(scene, Scene::Page(PageKind::Prayer) | Scene::PrayerPicker | Scene::PrayerCountdown | Scene::PrayerNotice);
-    if !on {
-        st.prayer = PrayerState::default();
-        return;
-    }
-    st.addons.insert(PRAYER_TIMES.id, AddonStatus::Ready);
-    if st.prayer.places.is_none() {
-        let list = PlaceList::parse(SAMPLE_PLACES).expect("sample places");
-        st.prayer.places = Some(std::sync::Arc::new(list));
-    }
-    let list = st.prayer.places.clone().expect("places");
-    st.prayer.place = list.find("jakarta").cloned();
-    st.prayer.suggested = false;
-    st.prayer.locate = Locate::Found { km: 2.0 };
-    st.prayer.located_at = Some(st.unix);
-    st.prayer.picking = scene == Scene::PrayerPicker;
-    if st.prayer.picking {
-        st.prayer.query = "band".into();
-    } else {
-        st.prayer.query.clear();
-    }
-    let site = st.prayer.site().expect("Jakarta's site");
-    let today = site.local_day(st.unix);
-    let ashar = poni_core::prayer::day_times(&site, today).expect("today's times").ashar;
-    // PONI_SELFTEST_PRAYER_AT=HH:MM: the Prayer page at that time of
-    // Jakarta's day instead (pictures of the night side: the moon on the arc).
-    let at = std::env::var("PONI_SELFTEST_PRAYER_AT").ok().filter(|_| scene == Scene::Page(PageKind::Prayer)).and_then(|v| {
-        let (h, m) = v.trim().split_once(':')?;
-        Some(h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60)
-    });
-    st.prayer.clock_shift = match at {
-        Some(secs) => today * 86_400 - i64::from(site.offset_min) * 60 + secs - st.unix,
-        None => ashar - 8 * 60 - st.unix,
-    };
-    st.prayer.handled_until = Some(st.prayer_now());
-    st.prayer.adzan = scene == Scene::PrayerNotice;
-    if scene == Scene::PrayerNotice {
-        let place = st.prayer.place.as_ref().map_or(String::new(), |p| p.label.clone());
-        st.notice = Some(Notice {
-            icon: Icon::Moon,
-            color: st.accent,
-            title: crate::pages::prayer::moment_title(poni_core::prayer::Prayer::Ashar),
-            subtitle: format!("{} \u{b7} {place}", site.hhmm(ashar)),
-            until,
-            action: Some(NoticeAction::OpenPage(PageKind::Prayer)),
-            inline: Some(InlineAction::StopAdzan),
-            reveal: None,
-        });
-    }
-}
-
-const SAMPLE_PLACES: &str = r#"{"places":[
-    {"id":"jakarta","label":"Kota Jakarta","kind":"kota","prov":"DKI Jakarta","lat":-6.1833,"lng":106.8333,"tz":"Asia/Jakarta"},
-    {"id":"banda-aceh","label":"Kota Banda Aceh","kind":"kota","prov":"Aceh","lat":5.55,"lng":95.3167,"tz":"Asia/Jakarta"},
-    {"id":"bandar-lampung","label":"Kota Bandar Lampung","kind":"kota","prov":"Lampung","lat":-5.4167,"lng":105.2667,"tz":"Asia/Jakarta"},
-    {"id":"kab-bandung","label":"Kab. Bandung","kind":"kab","prov":"Jawa Barat","lat":-7.0167,"lng":107.5333,"tz":"Asia/Jakarta","h0":-2},
-    {"id":"bandung","label":"Kota Bandung","kind":"kota","prov":"Jawa Barat","lat":-6.9,"lng":107.6167,"tz":"Asia/Jakarta","h0":-2},
-    {"id":"kab-bandung-barat","label":"Kab. Bandung Barat","kind":"kab","prov":"Jawa Barat","lat":-6.85,"lng":107.5167,"tz":"Asia/Jakarta","h0":-2},
-    {"id":"makkah","label":"Makkah","kind":"abroad","prov":"Arab Saudi","lat":21.4225,"lng":39.8261,"tz":"Asia/Riyadh","method":"ummalqura"}
-]}"#;
-
 fn fake_power(plugged: bool) -> PowerState {
     PowerState { has_battery: true, percent: 76, charging: plugged, on_ac: plugged, saver: false }
 }
@@ -766,40 +461,13 @@ enum Scene {
     VolumeHud,
     ChargingHud,
     BluetoothHud,
-    HealthNotice,
+    /// A focus session done: its notice, with Start.
+    FocusNotice,
     Page(PageKind),
-    /// The shelf while files are dragged over the island.
-    ShelfDrop,
-    /// An empty shelf: the drop zone and the Phone drop tile.
-    ShelfEmpty,
-    /// Phone drop open: the QR code waits for a phone.
-    ShelfPhone,
-    /// An iPhone asks to send three files.
-    ShelfPhoneAsk,
-    /// Files coming in from the iPhone.
-    ShelfPhoneReceive,
     /// Click the first header tab on the Today page; expect the Music page.
     TabClick,
-    /// The Health page before the person signs in with Oyenza: no numbers yet.
-    HealthSignedOut,
-    /// Oyenza: money arrived, its sum hidden behind Show.
-    OyenzaMoney,
-    /// ...and after Show.
-    OyenzaMoneyShown,
-    /// Oyenza: the day before a subscription renews.
-    OyenzaBill,
-    /// The Oyenza tab while a sign-in code waits for approval.
-    OyenzaSignIn,
-    /// The Oyenza tab right after a spend was saved (Undo showing).
-    OyenzaSaved,
-    /// The Health page signed in to Oyenza, before the phone sends any steps.
-    HealthSignedIn,
-    /// Click the gear in the header on the Health page; expect Settings.
+    /// Click the gear in the header on the Today page; expect Settings.
     GearClick,
-    /// Settings while a sign-in code waits for approval.
-    SettingsSigningIn,
-    /// Settings signed in to Oyenza.
-    SettingsSignedIn,
     /// System page on a desktop (no battery): Memory and its apps.
     SystemMemory,
     /// System page: the drives and disk activity.
@@ -812,36 +480,10 @@ enum Scene {
     SystemWaiting,
     /// Settings with Stay on top chosen for full-screen apps.
     SettingsStayOnTop,
-    /// Phone drop showing a pairing QR code (paired phones).
-    ShelfPairing,
-    /// A phone just finished pairing.
-    ShelfPaired,
-    /// The paired phones, each with Remove.
-    ShelfPairedPhones,
-    /// Files from a paired phone landed while the island was closed.
-    PairedNotice,
     /// System page: the graphics card.
     SystemGpu,
-    /// Add-ons: Prayer times downloading.
-    AddonsDownloading,
-    /// Add-ons: Prayer times on, its files in place.
+    /// Add-ons: Japanese readings on, its files in place.
     AddonsOn,
-    /// Add-ons: switched on without internet.
-    AddonsOffline,
-    /// Add-ons: a file came back wrong.
-    AddonsFailed,
-    /// Prayer times: the place picker, "band" typed.
-    PrayerPicker,
-    /// Prayer times: the collapsed countdown, 8 minutes before Ashar.
-    PrayerCountdown,
-    /// Prayer times: Ashar's time came, the adzan playing.
-    PrayerNotice,
-    /// The Oyenza page on yesterday (a dot on Today: something new there).
-    OyenzaYesterday,
-    /// The Oyenza page on tomorrow's bills.
-    OyenzaTomorrow,
-    /// Oyenza: a card charge read from the bank's email, its sum hidden.
-    OyenzaMoneyOut,
     /// Show over games: the readout over a game.
     GameStats,
     /// ...before the one-time OK: the frame rate waits, the rest shows.
@@ -850,22 +492,13 @@ enum Scene {
     SystemGames,
     /// System page, Games, before the one-time OK.
     SystemGamesAllow,
-    /// Music: a Japanese song whose kanji went unread, offering Japanese readings.
-    JaOffer,
-    /// Music: ...and Japanese readings coming in.
-    JaGetting,
     /// The idle pill in the status bar look (the Pill theme's; the other
     /// themes show the clock).
     IdleStatus,
-    /// Music playing while a synced lyric line is sung (the Pill theme shows
-    /// the line on the closed island).
-    MediaLyric,
     /// The battery ran low: the pop-up, not charging.
     LowBatteryHud,
     /// The Script page partway through a reading (paused, so the shot holds still).
     ScriptReading,
-    /// The same reading with Oyenza Studio Recorder installed: Record shows.
-    ScriptRecorder,
     /// System page on a desktop, Power: its power supply reports over USB.
     SystemPower,
     /// ...and a desktop whose power supply doesn't: the estimate.
@@ -874,13 +507,23 @@ enum Scene {
     /// clock waits out of the way, an invisible strip at the top edge.
     AsideIdle,
     /// ...and while a song sings its lines.
-    AsideLyric,
+    AsideMedia,
     /// ...a new song's title still drops down for its few seconds.
     AsidePeek,
     /// ...and so does the volume pop-up.
     AsideHud,
     /// Settings with Stay picked over maximized windows.
     SettingsAsideStay,
+    /// The Dock with nothing on it yet: what it is for, and Add.
+    DockEmpty,
+    /// The System page with Spotify watched (its bell lit).
+    SystemWatch,
+    /// A watched process ended: its notice.
+    ProcessNotice,
+    /// The Outlook agenda add-on: the next meeting counting down on the closed island.
+    MeetingCountdown,
+    /// ...and the Agenda page before a calendar link is pasted.
+    AgendaNoLink,
 }
 
 /// Running under Wine: its ntdll exports `wine_get_version`.
@@ -891,11 +534,11 @@ fn under_wine() -> bool {
 }
 
 /// What the Script page reads in its self-test scenes.
-const SAMPLE_SCRIPT: &str = "Hi everyone, this one takes two minutes. Today I'll show you the Shelf, and how to send a file to your phone.\n\n\
-Drop any file on the island and it waits on the Shelf. Press the phone button, scan the code, and the file is on your phone. \
-No cable, no account, nothing to install on the phone.\n\nThat's it. Thanks for watching.";
+const SAMPLE_SCRIPT: &str = "Hi everyone, this one takes two minutes. Today I'll show you the Focus timer, and how it keeps counting in the island.\n\n\
+Press Start on the Focus page and close the island: the minutes keep going at the top of the screen. \
+No window to keep open, no app to switch to.\n\nThat's it. Thanks for watching.";
 
-const SCENES: [Scene; 76] = [
+const SCENES: [Scene; 49] = [
     Scene::IdleClock,
     Scene::IdleEyes,
     Scene::Media,
@@ -904,32 +547,14 @@ const SCENES: [Scene; 76] = [
     Scene::VolumeHud,
     Scene::ChargingHud,
     Scene::BluetoothHud,
-    Scene::HealthNotice,
+    Scene::FocusNotice,
     Scene::Page(PageKind::Media),
     Scene::Page(PageKind::Focus),
-    Scene::Page(PageKind::Health),
-    Scene::Page(PageKind::Shelf),
-    Scene::ShelfDrop,
-    Scene::ShelfPhone,
-    Scene::ShelfPhoneAsk,
-    Scene::ShelfPhoneReceive,
-    // Last of the shelf scenes: hiding the items resets their fade-in.
-    Scene::ShelfEmpty,
     Scene::Page(PageKind::Tasks),
     Scene::Page(PageKind::Clipboard),
     Scene::Page(PageKind::Today),
     Scene::TabClick,
-    Scene::HealthSignedOut,
-    Scene::OyenzaMoney,
-    Scene::OyenzaMoneyShown,
-    Scene::OyenzaBill,
-    Scene::Page(PageKind::Oyenza),
-    Scene::OyenzaSignIn,
-    Scene::OyenzaSaved,
-    Scene::HealthSignedIn,
     Scene::GearClick,
-    Scene::SettingsSigningIn,
-    Scene::SettingsSignedIn,
     Scene::Page(PageKind::System),
     Scene::SystemMemory,
     Scene::SystemDrives,
@@ -937,53 +562,41 @@ const SCENES: [Scene; 76] = [
     Scene::SystemBattery,
     Scene::SystemWaiting,
     Scene::SettingsStayOnTop,
-    // Appended so the numbers of the screenshots above stay the same. They
-    // show an empty shelf: items shown again after ShelfEmpty would fade in.
-    Scene::ShelfPairing,
-    Scene::ShelfPaired,
-    Scene::ShelfPairedPhones,
-    Scene::PairedNotice,
     Scene::SystemGpu,
     // The Add-ons page: off (the "+" tab), then each state of a download.
     Scene::Page(PageKind::Addons),
-    Scene::AddonsDownloading,
     Scene::AddonsOn,
-    Scene::AddonsOffline,
-    Scene::AddonsFailed,
-    // Prayer times on, its clock 8 minutes before today's Ashar in Jakarta.
-    Scene::Page(PageKind::Prayer),
-    Scene::PrayerPicker,
-    Scene::PrayerCountdown,
-    Scene::PrayerNotice,
-    Scene::OyenzaYesterday,
-    Scene::OyenzaTomorrow,
-    Scene::OyenzaMoneyOut,
     Scene::GameStats,
     Scene::GameStatsAllow,
     Scene::SystemGames,
     Scene::SystemGamesAllow,
-    Scene::JaOffer,
-    Scene::JaGetting,
     // Appended so the numbers above stay. Every theme runs them; the Pill
     // theme draws the first two its own way.
     Scene::IdleStatus,
-    Scene::MediaLyric,
     Scene::LowBatteryHud,
     // The Script page: empty, then partway through a reading.
     Scene::Page(PageKind::Script),
     Scene::ScriptReading,
-    // ...and with the recorder installed (Record by Paste).
-    Scene::ScriptRecorder,
     // The whole PC's power: read from the power supply, then estimated.
     Scene::SystemPower,
     Scene::SystemPowerEstimate,
     // A maximized window under the island: what rests steps aside, what
     // happens still shows. Then the Settings page with Stay picked.
     Scene::AsideIdle,
-    Scene::AsideLyric,
+    Scene::AsideMedia,
     Scene::AsidePeek,
     Scene::AsideHud,
     Scene::SettingsAsideStay,
+    // The Dock: a few apps and the Add tile, then empty.
+    Scene::Page(PageKind::Dock),
+    Scene::DockEmpty,
+    // Quick notes; the System page's bell and its notice; the Outlook agenda.
+    Scene::Page(PageKind::Notes),
+    Scene::SystemWatch,
+    Scene::ProcessNotice,
+    Scene::Page(PageKind::Agenda),
+    Scene::MeetingCountdown,
+    Scene::AgendaNoLink,
 ];
 
 impl Scene {
@@ -997,78 +610,49 @@ impl Scene {
             Scene::VolumeHud => "volume-hud".into(),
             Scene::ChargingHud => "charging-hud".into(),
             Scene::BluetoothHud => "bluetooth-hud".into(),
-            Scene::HealthNotice => "health-notice".into(),
+            Scene::FocusNotice => "focus-notice".into(),
             Scene::Page(p) => format!("page-{}", p.key()),
-            Scene::ShelfDrop => "page-shelf-drop".into(),
-            Scene::ShelfEmpty => "page-shelf-empty".into(),
-            Scene::ShelfPhone => "page-shelf-phone".into(),
-            Scene::ShelfPhoneAsk => "page-shelf-phone-ask".into(),
-            Scene::ShelfPhoneReceive => "page-shelf-phone-receive".into(),
             Scene::TabClick => "tab-click-media".into(),
-            Scene::HealthSignedOut => "page-health-signed-out".into(),
-            Scene::OyenzaMoney => "oyenza-money".into(),
-            Scene::OyenzaMoneyShown => "oyenza-money-shown".into(),
-            Scene::OyenzaBill => "oyenza-bill".into(),
-            Scene::OyenzaSignIn => "page-oyenza-signin".into(),
-            Scene::OyenzaSaved => "page-oyenza-saved".into(),
-            Scene::HealthSignedIn => "page-health-signed-in".into(),
-            // Reached by clicking the gear: the signed-out Settings page.
+            // Reached by clicking the gear.
             Scene::GearClick => "page-settings".into(),
-            Scene::SettingsSigningIn => "page-settings-signing-in".into(),
-            Scene::SettingsSignedIn => "page-settings-signed-in".into(),
             Scene::SystemMemory => "page-system-memory".into(),
             Scene::SystemDrives => "page-system-drives".into(),
             Scene::SystemNetwork => "page-system-network".into(),
             Scene::SystemBattery => "page-system-battery".into(),
             Scene::SystemWaiting => "page-system-waiting".into(),
             Scene::SettingsStayOnTop => "page-settings-stay-on-top".into(),
-            Scene::ShelfPairing => "page-shelf-pairing".into(),
-            Scene::ShelfPaired => "page-shelf-paired".into(),
-            Scene::ShelfPairedPhones => "page-shelf-paired-phones".into(),
-            Scene::PairedNotice => "paired-received-notice".into(),
             Scene::SystemGpu => "page-system-gpu".into(),
-            Scene::AddonsDownloading => "page-addons-downloading".into(),
             Scene::AddonsOn => "page-addons-on".into(),
-            Scene::AddonsOffline => "page-addons-offline".into(),
-            Scene::AddonsFailed => "page-addons-failed".into(),
-            Scene::PrayerPicker => "page-prayer-picker".into(),
-            Scene::PrayerCountdown => "prayer-countdown".into(),
-            Scene::PrayerNotice => "prayer-notice".into(),
-            Scene::OyenzaYesterday => "page-oyenza-yesterday".into(),
-            Scene::OyenzaTomorrow => "page-oyenza-tomorrow".into(),
-            Scene::OyenzaMoneyOut => "oyenza-money-out".into(),
             Scene::GameStats => "game-stats".into(),
             Scene::GameStatsAllow => "game-stats-allow".into(),
             Scene::SystemGames => "page-system-games".into(),
             Scene::SystemGamesAllow => "page-system-games-allow".into(),
-            Scene::JaOffer => "page-media-ja-offer".into(),
-            Scene::JaGetting => "page-media-ja-getting".into(),
             Scene::IdleStatus => "idle-status".into(),
-            Scene::MediaLyric => "media-lyric".into(),
             Scene::LowBatteryHud => "low-battery-hud".into(),
             Scene::ScriptReading => "page-script-reading".into(),
-            Scene::ScriptRecorder => "page-script-recorder".into(),
             Scene::SystemPower => "page-system-power".into(),
             Scene::SystemPowerEstimate => "page-system-power-estimate".into(),
             Scene::AsideIdle => "aside-idle".into(),
-            Scene::AsideLyric => "aside-media-lyric".into(),
+            Scene::AsideMedia => "aside-media".into(),
             Scene::AsidePeek => "aside-new-song".into(),
             Scene::AsideHud => "aside-volume-hud".into(),
             Scene::SettingsAsideStay => "page-settings-maximized-stay".into(),
+            Scene::DockEmpty => "page-dock-empty".into(),
+            Scene::SystemWatch => "page-system-watch".into(),
+            Scene::ProcessNotice => "process-notice".into(),
+            Scene::MeetingCountdown => "meeting-countdown".into(),
+            Scene::AgendaNoLink => "page-agenda-no-link".into(),
         }
     }
 
     fn page(self) -> Option<PageKind> {
         match self {
             Scene::Page(p) => Some(p),
-            Scene::ShelfDrop | Scene::ShelfEmpty | Scene::ShelfPhone | Scene::ShelfPhoneAsk | Scene::ShelfPhoneReceive => Some(PageKind::Shelf),
             Scene::TabClick => Some(PageKind::ALL[0]),
-            Scene::HealthSignedOut => Some(PageKind::Health),
-            Scene::OyenzaSignIn | Scene::OyenzaSaved | Scene::OyenzaYesterday | Scene::OyenzaTomorrow => Some(PageKind::Oyenza),
-            Scene::HealthSignedIn => Some(PageKind::Health),
-            Scene::GearClick | Scene::SettingsSigningIn | Scene::SettingsSignedIn | Scene::SettingsStayOnTop | Scene::SettingsAsideStay => {
-                Some(PageKind::Settings)
-            }
+            Scene::GearClick | Scene::SettingsStayOnTop | Scene::SettingsAsideStay => Some(PageKind::Settings),
+            Scene::DockEmpty => Some(PageKind::Dock),
+            Scene::SystemWatch => Some(PageKind::System),
+            Scene::AgendaNoLink => Some(PageKind::Agenda),
             Scene::SystemMemory
             | Scene::SystemDrives
             | Scene::SystemNetwork
@@ -1079,33 +663,10 @@ impl Scene {
             | Scene::SystemGamesAllow
             | Scene::SystemPower
             | Scene::SystemPowerEstimate => Some(PageKind::System),
-            Scene::ShelfPairing | Scene::ShelfPaired | Scene::ShelfPairedPhones => Some(PageKind::Shelf),
-            Scene::AddonsDownloading | Scene::AddonsOn | Scene::AddonsOffline | Scene::AddonsFailed => Some(PageKind::Addons),
-            Scene::JaOffer | Scene::JaGetting => Some(PageKind::Media),
-            Scene::PrayerPicker => Some(PageKind::Prayer),
-            Scene::ScriptReading | Scene::ScriptRecorder => Some(PageKind::Script),
+            Scene::AddonsOn => Some(PageKind::Addons),
+            Scene::ScriptReading => Some(PageKind::Script),
             _ => None,
         }
-    }
-
-    /// Scenes that show something from Oyenza (every other one is signed out,
-    /// so their screenshots stay what they were before Oyenza).
-    fn oyenza(self) -> bool {
-        matches!(
-            self,
-            Scene::OyenzaMoney
-                | Scene::OyenzaMoneyShown
-                | Scene::OyenzaBill
-                | Scene::OyenzaSignIn
-                | Scene::OyenzaSaved
-                | Scene::OyenzaYesterday
-                | Scene::OyenzaTomorrow
-                | Scene::OyenzaMoneyOut
-                | Scene::Page(PageKind::Oyenza)
-                | Scene::HealthSignedIn
-                | Scene::SettingsSigningIn
-                | Scene::SettingsSignedIn
-        )
     }
 
     fn expanded(self) -> bool {
@@ -1118,50 +679,21 @@ impl Scene {
     }
 
     fn media_playing(self) -> bool {
-        matches!(self, Scene::Media | Scene::MediaTimer | Scene::MediaLyric | Scene::AsideLyric | Scene::AsidePeek) || self.expanded()
+        matches!(self, Scene::Media | Scene::MediaTimer | Scene::AsideMedia | Scene::AsidePeek) || self.expanded()
     }
 
     /// A maximized window is under the island.
     fn window_under(self) -> bool {
-        matches!(self, Scene::AsideIdle | Scene::AsideLyric | Scene::AsidePeek | Scene::AsideHud)
+        matches!(self, Scene::AsideIdle | Scene::AsideMedia | Scene::AsidePeek | Scene::AsideHud)
     }
 
     /// The island rests stepped aside: nothing to see, a strip to point at.
     fn rests_aside(self) -> bool {
-        matches!(self, Scene::AsideIdle | Scene::AsideLyric)
+        matches!(self, Scene::AsideIdle | Scene::AsideMedia)
     }
 
     fn timer_running(self) -> bool {
         matches!(self, Scene::Timer | Scene::MediaTimer) || self.expanded()
-    }
-}
-
-/// GET the phone page from a running Phone drop server: the address must be
-/// reachable and the page must come back whole. The detail never includes
-/// the link's secret.
-pub fn fetch_phone_page(url: &str) -> (bool, String) {
-    use std::io::{Read, Write};
-    use std::net::{SocketAddr, TcpStream};
-    use std::time::Duration;
-    let rest = url.split_once("//").map_or(url, |(_, r)| r);
-    let (host, path) = rest.split_once('/').map_or((rest, ""), |(h, p)| (h, p));
-    let Ok(addr) = host.parse::<SocketAddr>() else {
-        return (false, format!("link has no address: {host}"));
-    };
-    let fetch = || -> std::io::Result<String> {
-        let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
-        s.set_read_timeout(Some(Duration::from_secs(5)))?;
-        write!(s, "GET /{path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: poni-selftest\r\n\r\n")?;
-        let mut out = String::new();
-        s.read_to_string(&mut out)?;
-        Ok(out)
-    };
-    match fetch() {
-        Ok(resp) if resp.starts_with("HTTP/1.1 200") && resp.contains("<title>Oyenza Studio") && resp.trim_end().ends_with("</html>") => {
-            (true, format!("served the page at {addr} ({} bytes)", resp.len()))
-        }
-        Ok(resp) => (false, format!("unexpected answer from {addr}: {}", resp.lines().next().unwrap_or(""))),
-        Err(e) => (false, format!("couldn't fetch the page at {addr}: {e}")),
     }
 }
 
@@ -1229,8 +761,6 @@ enum Phase {
     Anim { seq: usize },
     /// Record the media pill playing, then paused (PONI_SELFTEST_LOOP=1).
     Loop,
-    /// Film the lyrics moving to the next line (PONI_SELFTEST_SCROLL=<Hz>).
-    Scroll,
     Settle { i: usize, since: f64, steps: u32, stable: u32 },
     Click { i: usize },
     ClickWait { i: usize, since: f64, from: PageKind, want: PageKind },
@@ -1244,12 +774,7 @@ pub struct SelfTest {
     phase: Phase,
     art: Option<Image>,
     art_color: Option<Color>,
-    lyrics: LyricsState,
     track_key: String,
-    /// Where the media-lyric scene holds the song: inside a sung line.
-    lyric_pos: f64,
-    /// The sample week every scene shows, except the signed-out Health page.
-    health: Option<HealthSnapshot>,
     states: Vec<StateReport>,
     checks: Vec<Check>,
     writes: Vec<(String, JoinHandle<Vec<String>>)>,
@@ -1262,11 +787,8 @@ pub struct SelfTest {
     /// PONI_SELFTEST_LOOP=1: after the scenes, record the media pill on a held
     /// clock, frame by frame.
     media_loop: bool,
-    /// PONI_SELFTEST_SCROLL=<Hz>: after the scenes, film the lyrics moving to
-    /// the next line on a held clock, one frame per refresh at that rate.
-    scroll_hz: Option<f64>,
     dpi_applied: bool,
-    /// PONI_SELFTEST_THEME=oyen|glass|pill: run every scene in that theme.
+    /// PONI_SELFTEST_THEME=light|glass|pill: run every scene in that theme.
     theme: Theme,
     /// Glass: which page is under the island (PONI_SELFTEST_GLASS), the
     /// window size its backdrop was drawn for, and the scene last seeded.
@@ -1277,15 +799,7 @@ pub struct SelfTest {
     slow_frames: Vec<String>,
     glass_size: Cell<(i32, i32)>,
     glass_scene: Cell<Option<Scene>>,
-    /// PONI_SELFTEST_LYRICS=ja|ko|zh: the sample song in that language.
-    lyrics_lang: Option<String>,
     renderer: &'static str,
-    /// The seeded shelf and its thumbnails (the empty-shelf scene hides
-    /// them, and the page forgets thumbnails of items that left).
-    shelf_items: Vec<ShelfItem>,
-    shelf_thumbs: Vec<(String, Option<Image>)>,
-    /// The real add-on download (PONI_SELFTEST_ADDONS=download), running beside the scenes.
-    addon_fetch: Option<std::sync::mpsc::Receiver<(bool, String)>>,
     /// Show over games' frame count, run on Poni's own frames: Windows' frame
     /// log must deliver them (PONI_SELFTEST_FRAMES=required on Windows CI,
     /// which runs as admin).
@@ -1298,7 +812,7 @@ const ANIMS: [(&str, Scene, Scene); 5] = [
     ("page", Scene::Page(PageKind::Media), Scene::Page(PageKind::Focus)),
     ("collapse", Scene::Page(PageKind::Media), Scene::Media),
     ("hud", Scene::Media, Scene::VolumeHud),
-    ("notice", Scene::IdleClock, Scene::HealthNotice),
+    ("notice", Scene::IdleClock, Scene::FocusNotice),
 ];
 /// Frames recorded per transition (~16 ms apart).
 const ANIM_FRAMES: usize = 40;
@@ -1309,11 +823,6 @@ const LOOP_PAUSE_S: f64 = 2.4;
 const LOOP_FPS: f64 = 30.0;
 const LOOP_ALIGN_S: f64 = 4.8;
 const LOOP_PREROLL_S: f64 = 2.4;
-/// The lyrics scroll film (PONI_SELFTEST_SCROLL): where the track starts
-/// (the next line starts 0.5 s in), unsaved lead-in, and the filmed length.
-const SCROLL_FROM_S: f64 = 65.0;
-const SCROLL_PREROLL_S: f64 = 1.0;
-const SCROLL_FILM_S: f64 = 1.3;
 
 impl SelfTest {
     pub fn new(dir: String) -> Self {
@@ -1324,10 +833,7 @@ impl SelfTest {
             phase: Phase::Settle { i: 0, since: 0.0, steps: 0, stable: 0 },
             art: None,
             art_color: None,
-            lyrics: LyricsState { track_key: track_key.clone(), ..Default::default() },
             track_key,
-            lyric_pos: TRACK_POS_S,
-            health: None,
             states: Vec::new(),
             checks: Vec::new(),
             writes: Vec::new(),
@@ -1336,10 +842,9 @@ impl SelfTest {
             dpi: std::env::var("PONI_SELFTEST_DPI").ok().and_then(|v| v.trim().parse().ok()),
             anim: std::env::var("PONI_SELFTEST_ANIM").is_ok_and(|v| v.trim() == "1"),
             media_loop: std::env::var("PONI_SELFTEST_LOOP").is_ok_and(|v| v.trim() == "1"),
-            scroll_hz: std::env::var("PONI_SELFTEST_SCROLL").ok().and_then(|v| v.trim().parse().ok()).filter(|hz: &f64| (20.0..=500.0).contains(hz)),
             dpi_applied: false,
             theme: match std::env::var("PONI_SELFTEST_THEME").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-                Ok("oyen") => Theme::Oyen,
+                Ok("light") | Ok("oyen") => Theme::Light,
                 Ok("glass") => Theme::Glass,
                 Ok("pill") => Theme::Pill,
                 _ => Theme::Classic,
@@ -1349,11 +854,7 @@ impl SelfTest {
             slow_frames: Vec::new(),
             glass_size: Cell::new((0, 0)),
             glass_scene: Cell::new(None),
-            lyrics_lang: std::env::var("PONI_SELFTEST_LYRICS").ok().map(|v| v.trim().to_ascii_lowercase()).filter(|v| !v.is_empty()),
             renderer: "software",
-            shelf_items: Vec::new(),
-            shelf_thumbs: Vec::new(),
-            addon_fetch: None,
             frames: None,
         }
     }
@@ -1386,7 +887,6 @@ impl SelfTest {
         // Quiet, deterministic settings (defaults otherwise: the home folder is fresh).
         st.settings.sounds = false;
         st.settings.show_media_activity = true;
-        st.settings.lyrics = true;
         st.settings.hud_volume = true;
         st.settings.hud_power = true;
         st.settings.hud_bluetooth = true;
@@ -1396,104 +896,15 @@ impl SelfTest {
         st.power = fake_power(false);
         st.stats = fake_stats();
 
-        // Album art + lyrics.
+        // Album art.
         let art = ImageData::new(ART_PX, ART_PX, make_art(ART_PX));
         self.art_color = Some(art.accent_color());
         self.art = Some(art);
-        // PONI_SELFTEST_LRC=<file>: a real song for a one-off check on CI
-        // (fetched there at run time; song lyrics never go in the repo).
-        let file = std::env::var("PONI_SELFTEST_LRC").ok().and_then(|p| fs::read_to_string(p.trim()).ok());
-        let lrc = match (file.as_deref(), self.lyrics_lang.as_deref()) {
-            (Some(f), _) => f,
-            (None, Some("ja")) => LYRICS_JA,
-            (None, Some("ko")) => LYRICS_KO,
-            (None, Some("zh")) => LYRICS_ZH,
-            _ => LYRICS_LRC,
-        };
-        let parsed = parse_lrc(lrc);
-        if file.is_none() {
-            let lyric_ok = parsed.synced && parsed.lines.len() == 12 && parsed.line_index_at(TRACK_POS_S) == Some(4);
-            self.checks.push(check(
-                "lyrics-fixture",
-                lyric_ok,
-                format!("{} lines, synced {}, line at {TRACK_POS_S}s = {:?}", parsed.lines.len(), parsed.synced, parsed.line_index_at(TRACK_POS_S)),
-            ));
-        }
-        if let Some(pos) = lyric_scene_pos(&parsed) {
-            self.lyric_pos = pos;
-        }
-        // PONI_SELFTEST_ANALYZER: "required" (Windows CI) = Windows' own
-        // analyzer must work and every line must read, kanji lines included;
-        // "off" = read the song the way a PC without Windows' Japanese reading
-        // data does (Oyenza Studio's own dictionary), every line too; "kana" = the
-        // way 0.1.11 and older read it there (kana lines only), for
-        // before/after pictures. Without it, Wine has no analyzer, so its
-        // lines come from Oyenza Studio's own dictionary.
-        let analyzer = std::env::var("PONI_SELFTEST_ANALYZER").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
-        let texts: Vec<&str> = parsed.lines.iter().map(|l| l.text.trim()).collect();
-        let japanese = poni_core::romanize::song_script(&texts) == Some(poni_core::romanize::Script::Japanese);
-        if analyzer == "required" {
-            let works = crate::services::romanize::analyzer_works();
-            self.checks.push(check("japanese-analyzer", works.is_ok(), works.err().unwrap_or_else(|| "Windows' analyzer reads Japanese".into())));
-        }
-        // PONI_SELFTEST_JA_DICT=<file> (CI passes the repo's copy): Oyen
-        // Poni's own dictionary, put where the Japanese readings add-on keeps
-        // it, so the run reads Japanese the way a PC with the add-on does.
-        if let Ok(src) = std::env::var("PONI_SELFTEST_JA_DICT") {
-            let file = &JAPANESE_READINGS.files[0];
-            let to = crate::services::addons::file_path(&JAPANESE_READINGS, file.name);
-            let placed = fs::read(src.trim()).map_err(|e| format!("{}: {e}", src.trim())).and_then(|b| {
-                if !file.matches(&b) {
-                    return Err(format!("{} bytes, not the dictionary the add-on pins", b.len()));
-                }
-                to.parent().map(fs::create_dir_all).transpose().map_err(|e| e.to_string())?;
-                fs::write(&to, &b).map_err(|e| e.to_string())
-            });
-            self.checks.push(check("ja-readings-file", placed.is_ok(), placed.map_or_else(|e| e, |_| format!("{} in the add-on's folder", file.name))));
-        }
-        let (ruby, wants_ja_readings) = if japanese && analyzer == "off" {
-            let read = crate::services::romanize::own_song(&texts);
-            (read.ruby, read.wants_ja_readings)
-        } else if japanese && analyzer == "kana" {
-            // A PC without Windows' Japanese data or the add-on: kana lines
-            // read, and the Music page offers the add-on.
-            let kana = |t: &str| if poni_core::romanize::needs_roman(t) { poni_core::romanize::japanese_kana_ruby(t).unwrap_or_default() } else { Vec::new() };
-            (texts.iter().map(|t| kana(t)).collect(), true)
-        } else {
-            // Read on a thread in the multithreaded apartment, the way the
-            // lyrics worker reads a real song (the UI thread here is
-            // single-threaded, and Windows' Japanese analyzer only works from one).
-            let read = std::thread::scope(|s| {
-                s.spawn(|| {
-                    let _com = crate::services::http::MtaGuard::new();
-                    crate::services::romanize::pronounce(&parsed)
-                })
-                .join()
-                .unwrap_or_default()
-            });
-            (read.ruby, read.wants_ja_readings)
-        };
-        let lang = self.lyrics_lang.clone().or_else(|| file.as_ref().map(|_| "lrc".to_string()));
-        if let Some(lang) = &lang {
-            // The CI log shows how each line reads (on Windows the Japanese
-            // readings come from the system's analyzer).
-            let read = |p: &[poni_core::romanize::Ruby]| p.iter().filter(|r| !r.roman.is_empty()).map(|r| r.roman.as_str()).collect::<Vec<_>>().join(" ");
-            let needing = texts.iter().filter(|t| poni_core::romanize::needs_roman(t)).count();
-            let lines_read = ruby.iter().filter(|p| p.iter().any(|r| !r.roman.is_empty())).count();
-            for (line, p) in parsed.lines.iter().zip(&ruby) {
-                crate::pinfo!("selftest: [{lang}] {} -> {}", line.text, read(p));
-            }
-            let ok = if matches!(analyzer.as_str(), "required" | "off") { lines_read == needing } else { lines_read > 0 };
-            self.checks.push(check("lyrics-pronunciation", ok, format!("{lines_read} of {needing} {lang} lines read in Latin letters")));
-        }
-        self.lyrics = LyricsState { track_key: self.track_key.clone(), status: LyricsStatus::Found, lyrics: Some(parsed), source: "Sample".into(), ruby, wants_ja_readings };
-
         seed_tasks(st);
-        self.health = Some(sample_health(st));
+        seed_notes(st);
         seed_clipboard(st);
         let today = st.day_key();
         st.store.focus_sessions.insert(today, 2);
-        self.seed_shelf(st);
 
         // Read-only: the Store build must reach the startup task its manifest declares.
         let (ok, detail) = match crate::autostart::describe() {
@@ -1501,30 +912,11 @@ impl SelfTest {
             Err(d) => (false, d),
         };
         self.checks.push(check("start-with-windows", ok, detail));
-
-        // PONI_SELFTEST_ADDONS=download (Windows CI): fetch every add-on's files
-        // from their releases and check each against the size and SHA-256 built in.
-        if std::env::var("PONI_SELFTEST_ADDONS").is_ok_and(|v| v.trim() == "download") {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let dir = paths::addons_dir().join("selftest-download");
-            let _ = std::thread::Builder::new().name("selftest-addon".into()).spawn(move || {
-                let (mut ok, mut said) = (true, Vec::new());
-                for a in poni_core::addons::ALL {
-                    let (fine, detail) = crate::services::addons::fetch_for_selftest(a, &dir);
-                    ok &= fine;
-                    said.push(format!("{}: {detail}", a.id));
-                }
-                let _ = tx.send((ok, said.join("; ")));
-            });
-            self.addon_fetch = Some(rx);
-        }
     }
 
     /// Called every ~50 ms; returns Some(exit code) when finished.
     pub fn step(&mut self, app: &mut App) -> Option<i32> {
         if !self.dpi_applied {
-            let (ok, detail) = app.selftest_phone_drop();
-            self.checks.push(check("phone-drop-server", ok, detail));
             self.dpi_applied = true;
             if let Some(dpi) = self.dpi {
                 crate::pinfo!("selftest: rendering at {dpi} DPI ({:.0} %)", dpi as f32 / 96.0 * 100.0);
@@ -1536,7 +928,7 @@ impl SelfTest {
         self.renderer = app.renderer();
         let now = clock::mono();
         let elapsed = self.t0.elapsed().as_secs_f64();
-        if elapsed > SCENE_DEADLINE && !matches!(self.phase, Phase::Finish { .. } | Phase::Done(_) | Phase::Anim { .. } | Phase::Loop | Phase::Scroll) {
+        if elapsed > SCENE_DEADLINE && !matches!(self.phase, Phase::Finish { .. } | Phase::Done(_) | Phase::Anim { .. } | Phase::Loop) {
             let at = match &self.phase {
                 Phase::Settle { i, .. } | Phase::Click { i } | Phase::ClickWait { i, .. } => SCENES[*i].name(),
                 _ => String::new(),
@@ -1553,20 +945,12 @@ impl SelfTest {
                     Phase::Anim { seq: seq + 1 }
                 } else if self.media_loop {
                     Phase::Loop
-                } else if self.scroll_hz.is_some() {
-                    Phase::Scroll
                 } else {
                     Phase::Finish { since: now }
                 };
             }
             Phase::Loop => {
                 self.record_loop(app);
-                self.phase = if self.scroll_hz.is_some() { Phase::Scroll } else { Phase::Finish { since: clock::mono() } };
-            }
-            Phase::Scroll => {
-                if let Some(hz) = self.scroll_hz {
-                    self.record_scroll(app, hz);
-                }
                 self.phase = Phase::Finish { since: clock::mono() };
             }
             Phase::Settle { i, since, steps, stable } => {
@@ -1621,7 +1005,7 @@ impl SelfTest {
             }
             Phase::Finish { since } => {
                 let all_done = self.writes.iter().all(|(_, h)| h.is_finished());
-                let deadline = if self.anim || self.media_loop || self.scroll_hz.is_some() { WRITE_DEADLINE + 40.0 } else { WRITE_DEADLINE };
+                let deadline = if self.anim || self.media_loop { WRITE_DEADLINE + 40.0 } else { WRITE_DEADLINE };
                 if all_done || elapsed > deadline {
                     let code = self.finish(all_done, now - since);
                     self.phase = Phase::Done(code);
@@ -1639,7 +1023,6 @@ impl SelfTest {
             Some(_) => Phase::Settle { i, since: now, steps: 0, stable: 0 },
             None if self.anim => Phase::Anim { seq: 0 },
             None if self.media_loop => Phase::Loop,
-            None if self.scroll_hz.is_some() => Phase::Scroll,
             None => Phase::Finish { since: now },
         }
     }
@@ -1726,67 +1109,6 @@ impl SelfTest {
         crate::pinfo!("selftest: media loop recorded, {frames} frames");
     }
 
-    /// The Music page on a held clock while the lyrics move on to the next
-    /// line ("Over the grey...", at 01:05.50), one frame per refresh at `hz`,
-    /// after SCROLL_PREROLL_S of unsaved frames. Saves the lyrics column (grey)
-    /// as scroll-lyrics-NNN.png and scroll-lyrics.json; qa tooling measures
-    /// from them how evenly the lines move.
-    fn record_scroll(&mut self, app: &mut App, hz: f64) {
-        let t = Instant::now();
-        loop {
-            self.apply(app, Scene::Page(PageKind::Media));
-            let _ = app.selftest_capture();
-            if (app.selftest_settled() && t.elapsed().as_millis() > 200) || t.elapsed().as_secs_f64() > 2.5 {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(16));
-        }
-        let start = clock::mono() + SCROLL_PREROLL_S + 1.0;
-        let pre = (SCROLL_PREROLL_S * hz).round() as usize;
-        let frames = (SCROLL_FILM_S * hz).round() as usize;
-        let mut placed = Vec::with_capacity(frames);
-        for i in 0..pre + frames {
-            let now = start + (i as f64 - pre as f64) / hz;
-            clock::hold(Some(now));
-            self.apply(app, Scene::Page(PageKind::Media));
-            if let Some(m) = app.st.media.as_mut() {
-                // Sampled at `now`: a timeline sampled later doesn't run backwards.
-                m.timeline = Timeline::new(SCROLL_FROM_S + (now - start), TRACK_LEN_S, now, true);
-            }
-            let (w, h, px, _) = app.selftest_capture();
-            let Some(k) = i.checked_sub(pre) else { continue };
-            // The right half of the page body: the lyrics column.
-            let s = self.scale;
-            let body = app.island_body_in_capture();
-            let x0 = ((body.x + body.w * 0.5) * s).round().clamp(0.0, w as f32) as usize;
-            let x1 = (body.right() * s).round().clamp(0.0, w as f32) as usize;
-            let y0 = ((body.y + pages::HEADER_H) * s).round().clamp(0.0, h as f32) as usize;
-            let y1 = ((body.bottom() - pages::PAD) * s).round().clamp(0.0, h as f32) as usize;
-            if x1 <= x0 || y1 <= y0 || px.len() < (w * h * 4) as usize {
-                continue;
-            }
-            let mut gray = Vec::with_capacity((x1 - x0) * (y1 - y0));
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let p = &px[(y * w as usize + x) * 4..][..4];
-                    gray.push(p[0].max(p[1]).max(p[2]));
-                }
-            }
-            placed.push(format!("{{\"frame\": {k}, \"t\": {:.5}, \"w\": {}, \"h\": {}}}", now - start, x1 - x0, y1 - y0));
-            let path = self.dir.join(format!("scroll-lyrics-{k:03}.png"));
-            let (gw, gh) = ((x1 - x0) as u32, (y1 - y0) as u32);
-            if let Err(e) = png::save_gray(&path, gw, gh, &gray) {
-                crate::pwarn!("selftest: {e}");
-            }
-        }
-        clock::hold(None);
-        let json = format!("{{\"name\": \"lyrics\", \"hz\": {hz}, \"scale\": {}, \"frames\": [\n  {}\n]}}\n", self.scale, placed.join(",\n  "));
-        if let Err(e) = fs::write(self.dir.join("scroll-lyrics.json"), json) {
-            crate::pwarn!("selftest: writing scroll-lyrics.json failed: {e}");
-        }
-        crate::pinfo!("selftest: lyrics scroll recorded, {frames} frames at {hz} Hz");
-    }
-
     // ------------------------------------------------------------ scene state
 
     /// Put the app into `scene`. Idempotent: called on every step and right
@@ -1801,7 +1123,7 @@ impl SelfTest {
         };
         if st.settings.theme != self.theme {
             st.settings.theme = self.theme;
-            st.accent = if self.theme == Theme::Oyen { crate::oyen::ORANGE } else { palette::BLUE };
+            st.accent = if self.theme == Theme::Light { Color::hex(poni_core::look::LIGHT_ACCENT) } else { palette::BLUE };
         }
         if let Some(run) = self.glass {
             // What's under the window: drawn again whenever the window grows.
@@ -1824,8 +1146,7 @@ impl SelfTest {
         st.stats = fake_stats();
         st.volume = VolumeState { level: 0.64, muted: false, known: true };
         st.pinned = false;
-        st.drag_hover = scene == Scene::ShelfDrop;
-        st.health = if matches!(scene, Scene::HealthSignedOut | Scene::HealthSignedIn) { None } else { self.health.clone() };
+        st.drag_hover = false;
         // Start with Windows as Settings shows it once read (it's read off the UI thread).
         st.ui.autostart = Some(true);
         // Hide in full-screen apps (the default), except in the Stay on top scene.
@@ -1834,30 +1155,15 @@ impl SelfTest {
         st.settings.step_aside = scene != Scene::SettingsAsideStay;
         // A new song's title shows for its few seconds (held here).
         st.ui.peek_until = if scene == Scene::AsidePeek { now + 30.0 } else { 0.0 };
-        st.phone = fake_phone(scene, now);
-        st.paired = fake_paired(scene, st.unix);
-        st.pair_server = (!st.paired.is_empty() || scene == Scene::ShelfPairing).then_some(true);
-        let empty_shelf = matches!(scene, Scene::ShelfEmpty | Scene::ShelfPairing | Scene::ShelfPaired | Scene::ShelfPairedPhones);
-        st.store.shelf.items = if empty_shelf { Vec::new() } else { self.shelf_items.clone() };
-        if !empty_shelf {
-            for (path, thumb) in &self.shelf_thumbs {
-                st.shelf_thumbs.entry(path.clone()).or_insert_with(|| thumb.clone());
-            }
-        }
 
         if scene.media_playing() {
-            let pos = if matches!(scene, Scene::MediaLyric | Scene::AsideLyric) { self.lyric_pos } else { TRACK_POS_S };
-            let timeline = Timeline::new(pos, TRACK_LEN_S, now, true);
+            let timeline = Timeline::new(TRACK_POS_S, TRACK_LEN_S, now, true);
             match st.media.as_mut() {
                 Some(m) if m.track_key == self.track_key => m.timeline = timeline,
                 _ => st.media = Some(self.media_session(timeline)),
             }
-            if st.lyrics.track_key != self.track_key || st.lyrics.status != LyricsStatus::Found {
-                st.lyrics = self.lyrics.clone();
-            }
         } else {
             st.media = None;
-            st.lyrics = LyricsState::default();
         }
 
         st.pomodoro.phase = PomoPhase::Focus;
@@ -1875,87 +1181,51 @@ impl SelfTest {
             _ => None,
         };
         st.notice = match scene {
-            Scene::HealthNotice => {
-                let steps = st.health.as_ref().map_or(0, |h| h.steps_on(&st.local.day_key()));
-                Some(crate::app::steps_goal_notice(steps, until))
-            }
-            Scene::OyenzaMoney | Scene::OyenzaMoneyShown => {
-                let hidden = scene == Scene::OyenzaMoney;
-                Some(Notice {
-                    icon: Icon::MoneyIn,
-                    color: palette::GREEN,
-                    title: "Money in · BCA".into(),
-                    subtitle: if hidden { "Amount and sender hidden".into() } else { "Rp 1.250.000 · Gaji Oktober".into() },
-                    until,
-                    action: Some(NoticeAction::OpenPage(PageKind::Oyenza)),
-                    inline: Some(InlineAction::ShowAmount),
-                    reveal: hidden.then(|| "Rp 1.250.000 · Gaji Oktober".into()),
-                })
-            }
-            Scene::PairedNotice => Some(Notice {
-                icon: Icon::Phone,
+            Scene::ProcessNotice => Some(Notice {
+                icon: Icon::CheckCircle,
                 color: palette::GREEN,
-                title: "3 files from Pixel 10 are on the Shelf".into(),
-                subtitle: "Open the Shelf to see them".into(),
+                title: "python finished".into(),
+                subtitle: "12 min after the bell".into(),
                 until,
-                action: Some(NoticeAction::OpenPage(PageKind::Shelf)),
+                action: None,
                 inline: None,
-                reveal: None,
             }),
-            Scene::OyenzaMoneyOut => Some(Notice {
-                icon: Icon::MoneyOut,
-                color: palette::BLUE,
-                title: "Money out · BCA".into(),
-                subtitle: "Amount and payee hidden".into(),
+            Scene::FocusNotice => Some(Notice {
+                icon: Icon::Coffee,
+                color: palette::GREEN,
+                title: "Focus done — 5 min break".into(),
+                subtitle: "2 sessions today · click to start your break".into(),
                 until,
-                action: Some(NoticeAction::OpenPage(PageKind::Oyenza)),
-                inline: Some(InlineAction::ShowAmount),
-                reveal: Some("Rp 89.000 · Tokopedia".into()),
-            }),
-            Scene::OyenzaBill => Some(Notice {
-                icon: Icon::Calendar,
-                color: palette::ORANGE,
-                title: "Spotify renews tomorrow".into(),
-                subtitle: "Amount hidden".into(),
-                until,
-                action: Some(NoticeAction::OpenPage(PageKind::Oyenza)),
-                inline: Some(InlineAction::ShowAmount),
-                reveal: Some("Rp 54.990".into()),
+                action: Some(NoticeAction::StartFocus),
+                inline: Some(InlineAction::StartFocus),
             }),
             _ => None,
         };
-        st.oyenza = if scene.oyenza() { fake_oyenza(st, scene, now) } else { OyenzaState::default() };
-        // Add-ons: what the page shows (settings stay as they are, so the worker downloads nothing).
-        let addon = match scene {
-            Scene::AddonsDownloading => AddonStatus::Downloading { done: 1_300_000, total: PRAYER_TIMES.size() },
-            Scene::AddonsOn => AddonStatus::Ready,
-            Scene::AddonsOffline => AddonStatus::Waiting,
-            Scene::AddonsFailed => AddonStatus::Failed,
-            _ => AddonStatus::Off,
-        };
-        st.addons.insert(PRAYER_TIMES.id, addon);
-        let ja = match scene {
-            Scene::JaGetting => AddonStatus::Downloading { done: 1_700_000, total: JAPANESE_READINGS.size() },
-            _ => AddonStatus::Off,
-        };
-        st.addons.insert(JAPANESE_READINGS.id, ja);
-        // Script reader: on for the Script page's scenes, off (no tab) elsewhere.
-        let script = scene.page() == Some(PageKind::Script);
+        // Script reader: on for the Script page's scenes and the Add-ons
+        // page's "on" one, off (no tab) elsewhere.
+        let script = scene.page() == Some(PageKind::Script) || scene == Scene::AddonsOn;
         st.addons.insert(SCRIPT_READER.id, if script { AddonStatus::Ready } else { AddonStatus::Off });
-        if scene.media_playing() {
-            st.lyrics.wants_ja_readings = self.lyrics.wants_ja_readings || matches!(scene, Scene::JaOffer | Scene::JaGetting);
-        }
-        seed_prayer(st, scene, until);
+        // The Outlook agenda: sample meetings around now (no Outlook asked).
+        let agenda = matches!(scene, Scene::Page(PageKind::Agenda) | Scene::MeetingCountdown | Scene::AgendaNoLink);
+        st.addons.insert(OUTLOOK_AGENDA.id, if agenda { AddonStatus::Ready } else { AddonStatus::Off });
+        st.agenda = if agenda { sample_agenda(st, scene == Scene::AgendaNoLink) } else { crate::state::AgendaState::default() };
+        // A made-up link (never fetched: the self-test starts no reader).
+        st.settings.agenda_link = if agenda && scene != Scene::AgendaNoLink { "https://outlook.live.com/owa/calendar/sample/calendar.ics".into() } else { String::new() };
+        // The bell: Spotify watched since 12 minutes ago.
+        st.watched = if scene == Scene::SystemWatch {
+            vec![crate::state::WatchedProcess { pid: 1001, name: "Spotify".into(), since: now - 720.0 }]
+        } else {
+            Vec::new()
+        };
         // The Script page: empty, or partway through the sample script.
         st.script = poni_core::script::Reader::default();
-        if matches!(scene, Scene::ScriptReading | Scene::ScriptRecorder) {
+        if scene == Scene::ScriptReading {
             st.store.script.text = SAMPLE_SCRIPT.into();
             st.script.word = 22;
             st.script.active = true;
         } else {
             st.store.script.text.clear();
         }
-        st.recorder = scene == Scene::ScriptRecorder;
         st.system = fake_system(scene);
         st.settings.game_stats = scene.game();
         st.game = fake_game(scene, &mut st.system);
@@ -1971,6 +1241,15 @@ impl SelfTest {
         };
         for (path, rgb) in SAMPLE_ICONS {
             st.app_icons.entry(path.to_string()).or_insert_with(|| Some(sample_icon(rgb)));
+        }
+        // The Dock: four of the sample apps (their icons pre-seeded, so no
+        // real file is asked about), empty in its own scene.
+        st.store.dock = poni_core::dock::Dock::default();
+        if scene != Scene::DockEmpty {
+            for (path, rgb) in SAMPLE_ICONS.iter().filter(|(p, _)| !p.contains("System32") && !p.contains("ProgramData")).take(5) {
+                let _ = st.store.dock.add(path);
+                st.dock_icons.entry(path.to_string()).or_insert_with(|| Some(sample_icon(*rgb)));
+            }
         }
         if let Some(p) = scene.page() {
             st.page = p;
@@ -1996,44 +1275,6 @@ impl SelfTest {
             can_seek: true,
             track_key: self.track_key.clone(),
         }
-    }
-
-    fn seed_shelf(&mut self, st: &mut AppState) {
-        let home = paths::data_dir();
-        let base = std::path::absolute(&home).unwrap_or(home).join("shelf-demo");
-        let txt = base.join("Trip notes.txt");
-        let img = base.join("Harbor sketch.png");
-        let folder = base.join("Project assets");
-        let mut errors = Vec::new();
-        if let Err(e) = fs::create_dir_all(&folder) {
-            errors.push(format!("{}: {e}", folder.display()));
-        }
-        if let Err(e) = fs::write(folder.join("readme.txt"), "Drafts and exports for the harbor poster.\n") {
-            errors.push(format!("readme.txt: {e}"));
-        }
-        if let Err(e) = fs::write(&txt, NOTES_TXT) {
-            errors.push(format!("{}: {e}", txt.display()));
-        }
-        if let Some(art) = &self.art {
-            if let Err(e) = png::save_pbgra(&img, art.width, art.height, &art.pixels) {
-                errors.push(e);
-            }
-        }
-        let made = [&folder, &img, &txt].iter().filter(|p| p.exists()).count();
-        self.checks.push(check("shelf-files", errors.is_empty() && made == 3, if errors.is_empty() { format!("{made} items in {}", base.display()) } else { errors.join("; ") }));
-
-        // Oldest first: add_paths puts each new path at the front.
-        let unix = st.unix;
-        for (k, p) in [&folder, &img, &txt].into_iter().enumerate() {
-            let s = p.to_string_lossy().into_owned();
-            st.store.shelf.add_paths(&[s.as_str()], unix - 3600 + k as i64 * 600);
-            // Pre-seeded thumbnails keep the screenshots identical on every machine
-            // (the app skips LoadThumb for paths it already has an entry for).
-            let thumb = if p == &img { self.art.clone() } else { None };
-            self.shelf_thumbs.push((s.clone(), thumb.clone()));
-            st.shelf_thumbs.insert(s, thumb);
-        }
-        self.shelf_items = st.store.shelf.items.clone();
     }
 
     // ------------------------------------------------------------ capture + checks
@@ -2164,9 +1405,6 @@ impl SelfTest {
         if let Some(want) = scene.page() {
             let page = app.st.page;
             checks.push(check("page", page == want, format!("showing '{}', expected '{}'", page.key(), want.key())));
-        }
-        if scene == Scene::MediaLyric {
-            checks.push(lyric_line_check(&app.st));
         }
         if matches!(scene, Scene::AsidePeek | Scene::AsideHud) {
             // Stepped aside, and still what just happened shows over the window.
@@ -2349,14 +1587,10 @@ impl SelfTest {
             let n = f.total();
             drop(f);
             if self.renderer != "software" {
-                self.checks.push(check("frame-count", n > 0, format!("{n} of Oyenza Studio's own frames counted from Windows' frame log")));
+                self.checks.push(check("frame-count", n > 0, format!("{n} of Dyna Island's own frames counted from Windows' frame log")));
             } else {
                 crate::pinfo!("selftest: frame count saw {n} frames (the software renderer presents none)");
             }
-        }
-        if let Some(rx) = self.addon_fetch.take() {
-            let (ok, detail) = rx.recv_timeout(std::time::Duration::from_secs(60)).unwrap_or((false, "still downloading 60 s after the scenes".into()));
-            self.checks.push(check("addon-download", ok, detail));
         }
         if self.states.len() < SCENES.len() {
             self.checks.push(check("states-visited", false, format!("{} of {} states captured", self.states.len(), SCENES.len())));
@@ -2424,6 +1658,45 @@ impl SelfTest {
 
 // ---------------------------------------------------------------- fixtures
 
+fn seed_notes(st: &mut AppState) {
+    let today = st.local.day_key();
+    let yesterday = st.local.add_days(-1).day_key();
+    let notes = &mut st.store.notes;
+    notes.add("Fornecedor ligou: retorno na quinta", &yesterday, "16:40");
+    notes.add("Share 12,4% na região Sul", &today, "10:05");
+    notes.add("Pedido 48213 · confirmar entrega", &today, "11:32");
+}
+
+/// The Outlook agenda as the sample day has it: a meeting 8 minutes away,
+/// one this afternoon, an all-day event and tomorrow's first. `closed`: no
+/// link yet, nothing read.
+fn sample_agenda(st: &AppState, closed: bool) -> crate::state::AgendaState {
+    use crate::state::{AgendaState, AgendaStatus};
+    use poni_core::agenda::{local_secs, tidy, Meeting};
+    if closed {
+        return AgendaState::default();
+    }
+    let now = local_secs(&st.local);
+    let minute = now - now.rem_euclid(60);
+    let day = now - now.rem_euclid(86_400);
+    let m = |subject: &str, location: &str, start: i64, mins: i64, all_day: bool| Meeting {
+        subject: subject.into(),
+        location: location.into(),
+        start,
+        end: start + mins * 60,
+        all_day,
+    };
+    // Kept on today's date for the page, whatever the time the test runs.
+    let soon = (minute + 8 * 60).min(day + 86_400 - 3600);
+    let meetings = tidy(vec![
+        m("Weekly sell-out review", "Microsoft Teams", soon, 30, false),
+        m("Cliente: apresentação de resultados", "Sala 3", (soon + 2 * 3600).min(day + 86_400 - 1800), 60, false),
+        m("Fechamento do mês", "", day, 24 * 60, true),
+        m("Planejamento semanal", "Microsoft Teams", day + 86_400 + 9 * 3600, 45, false),
+    ]);
+    AgendaState { status: AgendaStatus::Ready, meetings, read_at: Some(poni_core::datetime::fmt_clock(&st.local, st.settings.use_24h)), note: None }
+}
+
 fn seed_tasks(st: &mut AppState) {
     let unix = st.unix;
     let day_start = st.day_start_unix();
@@ -2434,26 +1707,6 @@ fn seed_tasks(st: &mut AppState) {
     if let Some(id) = done {
         tasks.toggle(id, (unix - 1800).max(day_start + 60));
     }
-}
-
-/// A week of steps as Oyenza would send it: today just over the goal.
-fn sample_health(st: &AppState) -> HealthSnapshot {
-    let today = st.local;
-    let week = [5210u32, 9120, 7480, 3960, 10230, 6840, 8412];
-    let days = week
-        .iter()
-        .enumerate()
-        .map(|(i, &steps)| {
-            let last = i + 1 == week.len();
-            HealthDay {
-                date: today.add_days(i as i64 + 1 - week.len() as i64).day_key(),
-                steps,
-                distance_m: last.then_some(6140),
-                active_kcal: last.then_some(342),
-            }
-        })
-        .collect();
-    HealthSnapshot { goal: 8000, source: HealthSource::AppleHealth, updated_at: st.unix - 8 * 60, days }
 }
 
 fn seed_clipboard(st: &mut AppState) {
@@ -2467,24 +1720,6 @@ fn seed_clipboard(st: &mut AppState) {
     if let Some(i) = pin {
         st.clip.toggle_pin(i);
     }
-}
-
-/// Where the media-lyric scene holds the song: 1.5 s into the first sung line
-/// after the one the other music scenes hold at (so the two show different
-/// lines), else into any sung line. `None` without synced lines.
-fn lyric_scene_pos(l: &Lyrics) -> Option<f64> {
-    if !l.synced {
-        return None;
-    }
-    // A line with words that lasts a second or more, inside the track.
-    let held = |k: usize| {
-        let start = l.lines[k].time_s;
-        let len = l.lines.get(k + 1).map_or(4.0, |n| n.time_s - start);
-        let pos = start + (len / 2.0).min(1.5);
-        (len >= 1.0 && pos < TRACK_LEN_S && !l.lines[k].text.trim().is_empty()).then_some(pos)
-    };
-    let after = l.line_index_at(TRACK_POS_S).map_or(0, |i| i + 1);
-    (after..l.lines.len()).chain(0..after).find_map(held)
 }
 
 /// Procedural album art: a harbor sunset with a paper boat (premultiplied BGRA, opaque).
@@ -2803,26 +2038,6 @@ fn pill_checks(frame: &Frame, body: Rect, scale: f32, checks: &mut Vec<Check>) {
         [left, right, bottom].iter().all(|&a| a <= 1),
         format!("edge alpha left {left}, right {right}, bottom {bottom} (want <= 1); {reach}"),
     ));
-}
-
-/// The media-lyric scene's premise: music plays and the song is inside a
-/// synced line that has words.
-fn lyric_line_check(st: &AppState) -> Check {
-    let Some(m) = st.media.as_ref().filter(|m| m.is_playing()) else {
-        return check("lyric-line", false, "no music playing");
-    };
-    let pos = m.timeline.position_at(st.now);
-    let lyrics = st.lyrics.lyrics.as_ref().filter(|_| st.lyrics.track_key == m.track_key);
-    match lyrics.and_then(|l| l.line_index_at(pos).map(|k| (k, l.lines[k].text.trim()))) {
-        Some((k, text)) if !text.is_empty() => {
-            // The reading the pill sings under it, when the song has them.
-            let reading = st.lyrics.ruby.get(k).filter(|_| st.settings.lyrics_pronunciation).and_then(|p| poni_core::romanize::reading(p));
-            let under = reading.map(|r| format!(", read \"{r}\"")).unwrap_or_default();
-            check("lyric-line", true, format!("line {} \"{text}\"{under} sung at {pos:.1} s", k + 1))
-        }
-        Some((k, _)) => check("lyric-line", false, format!("line {} at {pos:.1} s has no words", k + 1)),
-        None => check("lyric-line", false, format!("no synced line at {pos:.1} s")),
-    }
 }
 
 /// Centre of the first header tab. Mirrors `pages::draw_header`: tabs start at

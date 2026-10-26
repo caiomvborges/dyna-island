@@ -1,5 +1,4 @@
-//! Notices (`Mode::Notice`): a phone paired, money in, a prayer's time,
-//! a focus session done: an icon disc, a title and a line, and an inline
+//! Notices (`Mode::Notice`): a focus session done, headphones connected, …: an icon disc, a title and a line, and an inline
 //! action pill.
 //!
 //! In Pill a notice is a 48 DIP capsule as wide as its words (up to
@@ -58,8 +57,7 @@ fn subtitle_style() -> TextStyle {
 }
 
 /// What the width depends on: the words on screen and whether a pill sits
-/// beside them. Never the hidden sum (`reveal`), so the pill's size gives
-/// nothing away before Show.
+/// beside them.
 fn key(n: &Notice) -> u64 {
     wid(&n.title) ^ wid(&n.subtitle).rotate_left(21) ^ n.inline.map_or(0, |a| a as u64 + 1)
 }
@@ -108,15 +106,10 @@ fn guess(s: &str, size: f32) -> f32 {
 }
 
 /// The action already happened: the pill shows a check until the notice
-/// leaves (the app gives it 0.6 s more). As `activities::inline_done`, with
-/// the notice drawn standing in for `st.notice` (the same one while it
-/// shows; the last one while it fades).
-fn inline_done(st: &AppState, n: &Notice, a: InlineAction) -> bool {
+/// leaves (the app gives it 0.6 s more). As `activities::inline_done`.
+fn inline_done(st: &AppState, a: InlineAction) -> bool {
     match a {
         InlineAction::StartFocus => st.pomodoro.is_active(),
-        // Oyenza: the sum is in place once Show took it.
-        InlineAction::ShowAmount => n.reveal.is_none(),
-        InlineAction::StopAdzan => !st.prayer.adzan,
     }
 }
 
@@ -156,14 +149,12 @@ fn draw_notice(ui: &mut Ui, st: &AppState, n: &Notice, body: Rect) {
         let (label, icon, color) = match a {
             // Orange for focus; a break starts in its own green.
             InlineAction::StartFocus => ("Start", Icon::Play, phase_color(st.pomodoro.phase)),
-            InlineAction::ShowAmount => ("Show", Icon::Eye, n.color),
-            InlineAction::StopAdzan => ("Stop", Icon::Stop, n.color),
         };
         (a, label, icon, color, ui.pill_width(label, true, true).max(ACT_MIN_W))
     });
 
     // New words: measure them once for `geom` (a DIP of slack so they never
-    // trim). A change at rest (Show put the sum in place) asks for one more
+    // trim). A change at rest (new words) asks for one more
     // frame, which follows the new width.
     let (title_st, sub_st) = (title_style(), subtitle_style());
     let k = key(n);
@@ -201,7 +192,7 @@ fn draw_notice(ui: &mut Ui, st: &AppState, n: &Notice, body: Rect) {
     // inline pill is registered after it so it wins the hit test.
     ui.button(wid("notice"), body);
     if let Some((a, label, icon, color, r)) = act {
-        if inline_done(st, n, a) {
+        if inline_done(st, a) {
             ui.c.fill_rrect(r, r.h / 2.0, color.with_alpha(0.20));
             ui.c.icon(Icon::Check, Rect::from_center(r.center(), 14.0, 14.0), color);
         } else {
@@ -214,35 +205,12 @@ fn draw_notice(ui: &mut Ui, st: &AppState, n: &Notice, body: Rect) {
 mod tests {
     use super::*;
 
-    fn money(subtitle: &str, reveal: Option<&str>) -> Notice {
-        Notice {
-            icon: Icon::MoneyIn,
-            color: palette::GREEN,
-            title: "Money in \u{b7} BCA".into(),
-            subtitle: subtitle.into(),
-            until: 0.0,
-            action: None,
-            inline: Some(InlineAction::ShowAmount),
-            reveal: reveal.map(Into::into),
-        }
-    }
-
     #[test]
     fn width_stays_between_its_bounds_on_even_dips() {
         assert_eq!(fit(10.0), MIN_W);
         assert_eq!(fit(1000.0), MAX_W);
         assert_eq!(fit(251.2), 252.0);
         assert_eq!(fit(253.0), 254.0);
-    }
-
-    #[test]
-    fn a_hidden_sum_never_sizes_the_pill() {
-        let long = money("Amount and sender hidden", Some("Rp 1.250.000 \u{b7} Gaji Oktober"));
-        let short = money("Amount and sender hidden", Some("Rp 9"));
-        assert_eq!(key(&long), key(&short));
-        assert_eq!(guess_width(&long), guess_width(&short));
-        // Once shown, the words are new and the width follows them.
-        assert_ne!(key(&long), key(&money("Rp 1.250.000 \u{b7} Gaji Oktober", None)));
     }
 
     #[test]

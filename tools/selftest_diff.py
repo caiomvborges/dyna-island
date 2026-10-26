@@ -13,7 +13,7 @@ means a scene moved or was lost.
 
 Some pixels change between two runs of the same build: the clock shows the
 minute the picture was taken (run both builds side by side, as
-tools/site_shots.py says), and the equalizer, a blink and Oyen move with time.
+tools/site_shots.py says), and the equalizer, and a blink move with time.
 Give more runs of the <before> build as --noise (as many as you have): a
 picture that differs between <before> and any of them is listed as
 time-dependent and doesn't count.

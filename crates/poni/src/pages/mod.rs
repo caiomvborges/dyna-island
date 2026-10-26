@@ -10,15 +10,14 @@
 //! files, saving, …).
 
 pub mod addons;
+pub mod agenda;
 pub mod clipboard;
+pub mod dock;
 pub mod focus;
-pub mod health;
 pub mod media;
-pub mod oyenza;
-pub mod prayer;
+pub mod notes;
 pub mod script;
 pub mod settings;
-pub mod shelf;
 pub mod system;
 pub mod tasks;
 pub mod today;
@@ -50,18 +49,18 @@ pub fn header_rect(body: Rect) -> Rect {
 pub enum PageKind {
     Media,
     Focus,
-    Health,
-    Shelf,
     Tasks,
+    /// Quick notes.
+    Notes,
     Clipboard,
     Today,
     System,
+    /// Today's and tomorrow's meetings from Outlook, while that add-on is on.
+    Agenda,
+    /// Programs and shortcuts the person picked, opened with a click.
+    Dock,
     /// The teleprompter: a script read under the webcam.
     Script,
-    /// Only while signing in to Oyenza or signed in ([`tabs`]).
-    Oyenza,
-    /// Prayer times, while that add-on is on ([`tabs`]).
-    Prayer,
     /// The "+" at the end of the tab row: features to switch on, each of
     /// which downloads only then (`poni_core::addons`).
     Addons,
@@ -70,18 +69,17 @@ pub enum PageKind {
 }
 
 impl PageKind {
-    pub const ALL: [PageKind; 13] = [
+    pub const ALL: [PageKind; 12] = [
         PageKind::Media,
         PageKind::Focus,
-        PageKind::Health,
-        PageKind::Shelf,
         PageKind::Tasks,
+        PageKind::Notes,
         PageKind::Clipboard,
         PageKind::Today,
         PageKind::System,
+        PageKind::Agenda,
+        PageKind::Dock,
         PageKind::Script,
-        PageKind::Oyenza,
-        PageKind::Prayer,
         PageKind::Addons,
         PageKind::Settings,
     ];
@@ -90,23 +88,21 @@ impl PageKind {
         match self {
             PageKind::Media => "media",
             PageKind::Focus => "focus",
-            PageKind::Health => "health",
-            PageKind::Shelf => "shelf",
             PageKind::Tasks => "tasks",
+            PageKind::Notes => "notes",
             PageKind::Clipboard => "clipboard",
             PageKind::Today => "today",
             PageKind::System => "system",
+            PageKind::Dock => "dock",
+            PageKind::Agenda => "agenda",
             PageKind::Script => "script",
-            PageKind::Oyenza => "oyenza",
-            PageKind::Prayer => "prayer",
             PageKind::Addons => "addons",
             PageKind::Settings => "settings",
         }
     }
 
     pub fn from_key(s: &str) -> PageKind {
-        // Health took the Water page's place in the tab row.
-        let s = if s.trim().eq_ignore_ascii_case("water") { "health" } else { s.trim() };
+        let s = s.trim();
         Self::ALL.into_iter().find(|p| p.key().eq_ignore_ascii_case(s)).unwrap_or(PageKind::Media)
     }
 
@@ -114,15 +110,14 @@ impl PageKind {
         match self {
             PageKind::Media => "Music",
             PageKind::Focus => "Focus",
-            PageKind::Health => "Health",
-            PageKind::Shelf => "Shelf",
             PageKind::Tasks => "Tasks",
+            PageKind::Notes => "Notes",
             PageKind::Clipboard => "Clipboard",
             PageKind::Today => "Today",
             PageKind::System => "System",
+            PageKind::Dock => "Dock",
+            PageKind::Agenda => "Agenda",
             PageKind::Script => "Script",
-            PageKind::Oyenza => "Oyenza",
-            PageKind::Prayer => "Prayer",
             PageKind::Addons => "Add-ons",
             PageKind::Settings => "Settings",
         }
@@ -132,15 +127,14 @@ impl PageKind {
         match self {
             PageKind::Media => Icon::Music,
             PageKind::Focus => Icon::Timer,
-            PageKind::Health => Icon::Steps,
-            PageKind::Shelf => Icon::Tray,
             PageKind::Tasks => Icon::ListChecks,
+            PageKind::Notes => Icon::Note,
             PageKind::Clipboard => Icon::Clipboard,
             PageKind::Today => Icon::Calendar,
             PageKind::System => Icon::Gauge,
+            PageKind::Dock => Icon::Dock,
+            PageKind::Agenda => Icon::Agenda,
             PageKind::Script => Icon::Script,
-            PageKind::Oyenza => Icon::Wallet,
-            PageKind::Prayer => Icon::Moon,
             PageKind::Addons => Icon::Addons,
             PageKind::Settings => Icon::Gear,
         }
@@ -162,17 +156,14 @@ impl PageKind {
     }
 }
 
-/// The tabs in the header: every page but Settings, Oyenza only while
-/// signing in or signed in, and Prayer and Script only while their add-ons
-/// are on. Add-ons is last, in both apps (the Mac app's lists only what it
-/// has).
+/// The tabs in the header: every page but Settings, and Script only while
+/// its add-on is on. Add-ons is last.
 pub fn tabs(st: &AppState) -> Vec<PageKind> {
     PageKind::ALL
         .into_iter()
         .filter(|p| match p {
-            PageKind::Oyenza => st.oyenza.tab_visible(),
-            PageKind::Prayer => st.prayer_on(),
             PageKind::Script => st.script_on(),
+            PageKind::Agenda => st.agenda_on(),
             p => p.tabbed(),
         })
         .collect()
@@ -190,15 +181,14 @@ pub fn content_height(p: PageKind, st: &AppState) -> f32 {
     match p {
         PageKind::Media => media::height(st),
         PageKind::Focus => focus::height(st),
-        PageKind::Health => health::height(st),
-        PageKind::Shelf => shelf::height(st),
         PageKind::Tasks => tasks::height(st),
+        PageKind::Notes => notes::height(st),
         PageKind::Clipboard => clipboard::height(st),
         PageKind::Today => today::height(st),
         PageKind::System => system::height(st),
+        PageKind::Dock => dock::height(st),
+        PageKind::Agenda => agenda::height(st),
         PageKind::Script => script::height(st),
-        PageKind::Oyenza => oyenza::height(st),
-        PageKind::Prayer => prayer::height(st),
         PageKind::Addons => addons::height(st),
         PageKind::Settings => settings::height(st),
     }
@@ -212,19 +202,12 @@ pub fn next_wake(page: PageKind, st: &AppState) -> Option<f64> {
     let wake = match page {
         PageKind::Clipboard => clipboard::next_wake(st),
         PageKind::Tasks => tasks::next_wake(st),
-        PageKind::Shelf => shelf::next_wake(st),
-        PageKind::Oyenza => oyenza::next_wake(st),
-        PageKind::Settings => settings::next_wake(st),
+        PageKind::Notes => notes::next_wake(st),
+        PageKind::Agenda => agenda::next_wake(st),
         PageKind::Script => script::next_wake(st),
-        PageKind::Prayer => prayer::next_wake(st),
         _ => None,
     };
-    // Oyen in the header blinks and flicks an ear now and then.
-    let oyen = crate::oyen::on(st.settings.theme).then(|| crate::oyen::next_rest_move(st.now));
-    match (wake, oyen) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
+    wake
 }
 
 /// A page switch in progress: the page we came from, 0..1 progress, and the
@@ -320,15 +303,14 @@ pub(crate) fn draw_page(ui: &mut Ui, st: &mut AppState, area: Rect, page: PageKi
     match page {
         PageKind::Media => media::draw(ui, st, area),
         PageKind::Focus => focus::draw(ui, st, area),
-        PageKind::Health => health::draw(ui, st, area),
-        PageKind::Shelf => shelf::draw(ui, st, area),
         PageKind::Tasks => tasks::draw(ui, st, area),
+        PageKind::Notes => notes::draw(ui, st, area),
         PageKind::Clipboard => clipboard::draw(ui, st, area),
         PageKind::Today => today::draw(ui, st, area),
         PageKind::System => system::draw(ui, st, area),
+        PageKind::Dock => dock::draw(ui, st, area),
+        PageKind::Agenda => agenda::draw(ui, st, area),
         PageKind::Script => script::draw(ui, st, area),
-        PageKind::Oyenza => oyenza::draw(ui, st, area),
-        PageKind::Prayer => prayer::draw(ui, st, area),
         PageKind::Addons => addons::draw(ui, st, area),
         PageKind::Settings => settings::draw(ui, st, area),
     }
@@ -366,10 +348,6 @@ const PIN_GAP: f32 = 10.0;
 const PIN: f32 = 28.0;
 const GEAR: f32 = 28.0;
 const GEAR_GAP: f32 = 2.0;
-/// His theme: Oyen peeks up beside the pin, as he does beside the clock when
-/// the island is closed.
-const OYEN_W: f32 = 24.0;
-const OYEN_GAP: f32 = 6.0;
 /// Hover labels: dwell, fade-in, capsule metrics.
 const TIP_DELAY: f64 = 0.4;
 const TIP_FADE: f64 = 0.12;
@@ -418,7 +396,7 @@ pub(crate) fn draw_header(ui: &mut Ui, st: &mut AppState, r: Rect, page: PageKin
     let lay_to = if from == page { lay_from.clone() } else { tab_layout(ui, r.x, &row, page, &label_st, scale) };
     let tabs: Vec<Rect> =
         (0..row.len()).map(|i| Rect::new(lerp(lay_from[i].0, lay_to[i].0, e), cy - TAB_H / 2.0, lerp(lay_from[i].1, lay_to[i].1, e), TAB_H)).collect();
-    // A page that isn't in the row (Oyenza right after signing out) counts as the first tab.
+    // A page that isn't in the row (Script right after switching it off) counts as the first tab.
     let place = |p: PageKind| row.iter().position(|t| *t == p).unwrap_or(0);
     let (fi, pi) = (place(from), place(page));
     let tabs_end = tabs[tabs.len() - 1].right();
@@ -482,16 +460,6 @@ pub(crate) fn draw_header(ui: &mut Ui, st: &mut AppState, r: Rect, page: PageKin
 
     let gear_r = Rect::new(snap(left - PIN_GAP - GEAR, scale), cy - GEAR / 2.0, GEAR, GEAR);
     let pin_r = Rect::new(snap(gear_r.x - GEAR_GAP - PIN, scale), cy - PIN / 2.0, PIN, PIN);
-    let oyen_cx = pin_r.x - OYEN_GAP - OYEN_W / 2.0;
-    if crate::oyen::on(st.settings.theme) && oyen_cx - OYEN_W / 2.0 > tabs_end + 12.0 {
-        // Eyes on the cursor while it is over the island; asleep at night.
-        let look = ui.input.mouse.map(|p| ((p.x - r.center().x) / (r.w / 2.0)).clamp(-1.0, 1.0));
-        let (frame, moving) = crate::oyen::rest(st.now, st.local.hour < 5, look);
-        if moving {
-            ui.request_anim();
-        }
-        crate::oyen::peek(ui.c, &frame, oyen_cx, cy + 9.0, OYEN_W, r.y);
-    }
     if pin_r.x > tabs_end + 8.0 {
         let pinned = st.pinned;
         let (icon, color) = if pinned { (Icon::PinFill, st.accent) } else { (Icon::Pin, palette::TEXT_FAINT) };
@@ -598,7 +566,6 @@ pub fn empty_state(ui: &mut Ui, area: Rect, icon: Icon, title: &str, hint: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::OyenzaLink;
     use poni_core::settings::Settings;
     use poni_core::store::Store;
 
@@ -610,10 +577,7 @@ mod tests {
     fn settings_has_the_gear_not_a_tab() {
         let mut st = state();
         assert!(!tabs(&st).contains(&PageKind::Settings));
-        assert!(!tabs(&st).contains(&PageKind::Oyenza));
-        st.oyenza.link = OyenzaLink::Connected { account: "a•••@example.com".into() };
-        let row = tabs(&st);
-        assert!(row.contains(&PageKind::Oyenza) && !row.contains(&PageKind::Settings));
+        st.addons.insert("script", poni_core::addons::Status::Ready);
         // Stepping through the tabs never lands on Settings.
         let mut p = PageKind::Media;
         for _ in 0..2 * PageKind::ALL.len() {
@@ -630,27 +594,10 @@ mod tests {
 
     #[test]
     fn addons_is_the_last_tab_and_never_makes_the_window_taller() {
-        let mut st = state();
-        assert_eq!(tabs(&st).last(), Some(&PageKind::Addons));
-        st.oyenza.link = OyenzaLink::Connected { account: "a•••@example.com".into() };
+        let st = state();
         assert_eq!(tabs(&st).last(), Some(&PageKind::Addons));
         assert_eq!(PageKind::from_key("addons"), PageKind::Addons);
         assert!(content_height(PageKind::Addons, &st) <= content_height(PageKind::Tasks, &st));
-    }
-
-    #[test]
-    fn prayer_has_a_tab_only_while_its_add_on_is_on_and_ready() {
-        let mut st = state();
-        assert!(!tabs(&st).contains(&PageKind::Prayer));
-        st.addons.insert("sholat", poni_core::addons::Status::Ready);
-        assert!(!tabs(&st).contains(&PageKind::Prayer), "no places read yet");
-        let list = poni_core::prayer::PlaceList::parse(r#"{"places":[]}"#).unwrap();
-        st.prayer.places = Some(std::sync::Arc::new(list));
-        let row = tabs(&st);
-        assert_eq!(&row[row.len() - 2..], &[PageKind::Prayer, PageKind::Addons]);
-        assert!(content_height(PageKind::Prayer, &st) <= content_height(PageKind::Tasks, &st));
-        st.addons.insert("sholat", poni_core::addons::Status::Downloading { done: 1, total: 2 });
-        assert!(!tabs(&st).contains(&PageKind::Prayer));
     }
 
     #[test]
@@ -677,5 +624,8 @@ mod tests {
         // grew past Tasks' 200 with its Over maximized windows row).
         let st = state();
         assert!(content_height(PageKind::Settings, &st) <= content_height(PageKind::System, &st));
+        assert!(content_height(PageKind::Dock, &st) <= content_height(PageKind::System, &st));
+        assert!(content_height(PageKind::Notes, &st) <= content_height(PageKind::System, &st));
+        assert!(content_height(PageKind::Agenda, &st) <= content_height(PageKind::System, &st));
     }
 }

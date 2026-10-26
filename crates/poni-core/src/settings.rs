@@ -27,9 +27,10 @@ pub enum Theme {
     /// The plain black island.
     #[default]
     Classic,
-    /// Oyen, the Oyenza cat, lives in the island: he peeks over its edge
-    /// while it rests, bobs to the music and takes Oyen's orange as accent.
-    Oyen,
+    /// A light island: warm cream ground, dark ink and an amber accent.
+    /// Settings files from before the name change say "oyen".
+    #[serde(alias = "oyen")]
+    Light,
     /// Liquid glass: the island bends, frosts and tints what's under it.
     Glass,
     /// Pill: the island floats a little below the top edge as a black
@@ -79,32 +80,25 @@ pub struct Settings {
     pub step_aside: bool,
     pub monitor: MonitorChoice,
     pub show_media_activity: bool,
-    pub lyrics: bool,
-    /// Romanized "pronunciation" line under Japanese, Korean and Chinese lyrics.
-    pub lyrics_pronunciation: bool,
-    /// Shift synced lyrics: positive shows each line earlier (ms).
-    pub lyrics_offset_ms: i32,
     pub hud_volume: bool,
     pub hud_power: bool,
     pub hud_bluetooth: bool,
     pub clipboard_history: bool,
     pub sounds: bool,
-    /// Page shown first when expanding ("media", "focus", "health", "shelf", "tasks", "clipboard", "today").
+    /// Page shown first when expanding ("media", "focus", "tasks", "clipboard", "today", …).
     pub start_page: String,
     /// Remember the last page instead of `start_page`.
     pub remember_page: bool,
     pub pomodoro: PomodoroConfig,
-    /// Oyenza (once signed in): show sums and senders on the island straight
-    /// away. Off: they wait for a click on Show, so a shared screen shows none.
-    pub oyenza_show_amounts: bool,
     /// Keep the System page's charts going while it's closed (a light reading
     /// of the kernel counters once a second), so they're full when it opens.
     pub system_history: bool,
+    /// The Outlook agenda add-on's calendar: the ICS link Outlook publishes
+    /// (`ics::check_link` holds it to Outlook's own hosts). Empty: none yet.
+    pub agenda_link: String,
     /// Add-ons switched on, by id (`poni_core::addons`). Ids this version
     /// doesn't know are kept, so a newer Poni's choices survive a save.
     pub addons: BTreeMap<String, bool>,
-    /// The Prayer times add-on's choices.
-    pub prayer: PrayerSettings,
     /// Show over games: while a full-screen app is in front, the island
     /// shows its frame rate, the GPU's load and temperature and the CPU's
     /// load. Turning it on also keeps the island on top of full-screen apps.
@@ -116,40 +110,6 @@ pub struct Settings {
     /// front. Its own name: the corner test build wrote `game_readout`
     /// ("peek" as its default) into the files of the people who tried it.
     pub game_peek: bool,
-}
-
-/// What plays when a prayer's time comes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PrayerSound {
-    /// The adzan recording (Subuh plays the tone: the recording isn't Subuh's adzan).
-    Adzan,
-    /// A short system tone.
-    #[default]
-    Tone,
-    Silent,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PrayerSettings {
-    /// The place the times are for: its id in the add-on's place list. None
-    /// until one is found or picked.
-    pub place: Option<String>,
-    /// Let Windows' location pick the nearest place, and pick again when the
-    /// PC moves. Picking a place by hand turns this off.
-    pub follow_location: bool,
-    pub sound: PrayerSound,
-    /// Minutes before each prayer the island counts down (0 = no countdown).
-    pub remind_before_min: u32,
-    /// Pause music that is playing when the adzan starts (it stays paused).
-    pub pause_music: bool,
-}
-
-impl Default for PrayerSettings {
-    fn default() -> Self {
-        Self { place: None, follow_location: true, sound: PrayerSound::Tone, remind_before_min: 10, pause_music: true }
-    }
 }
 
 impl Default for Settings {
@@ -166,9 +126,6 @@ impl Default for Settings {
             step_aside: true,
             monitor: MonitorChoice::Primary,
             show_media_activity: true,
-            lyrics: true,
-            lyrics_pronunciation: true,
-            lyrics_offset_ms: 0,
             hud_volume: true,
             hud_power: true,
             hud_bluetooth: true,
@@ -177,10 +134,9 @@ impl Default for Settings {
             start_page: "media".into(),
             remember_page: true,
             pomodoro: PomodoroConfig::default(),
-            oyenza_show_amounts: false,
             system_history: true,
+            agenda_link: String::new(),
             addons: BTreeMap::new(),
-            prayer: PrayerSettings::default(),
             game_stats: false,
             game_peek: false,
         }
@@ -238,7 +194,6 @@ impl Settings {
             self.hide_in_fullscreen = false;
         }
         self.hover_delay_ms = self.hover_delay_ms.min(2000);
-        self.lyrics_offset_ms = self.lyrics_offset_ms.clamp(-5000, 5000);
         self.collapse_delay_ms = self.collapse_delay_ms.min(5000);
         if !self.expanded_width.is_finite() {
             self.expanded_width = 620.0;
@@ -249,7 +204,6 @@ impl Settings {
         p.short_break_min = p.short_break_min.clamp(1, 60);
         p.long_break_min = p.long_break_min.clamp(1, 120);
         p.long_every = p.long_every.min(12);
-        self.prayer.remind_before_min = self.prayer.remind_before_min.min(60);
         self
     }
 }
@@ -269,12 +223,12 @@ mod tests {
     #[test]
     fn addons_are_off_until_switched_on_and_unknown_ones_survive() {
         let mut s = Settings::default();
-        assert!(!s.addon_on("sholat"));
-        s.set_addon("sholat", true);
-        assert!(s.addon_on("sholat"));
+        assert!(!s.addon_on("addon"));
+        s.set_addon("addon", true);
+        assert!(s.addon_on("addon"));
         // A newer Poni's add-on stays in the file when this one saves it.
-        let s: Settings = serde_json::from_str(r#"{"addons":{"sholat":true,"future":true}}"#).unwrap();
-        assert!(s.addon_on("sholat"));
+        let s: Settings = serde_json::from_str(r#"{"addons":{"addon":true,"future":true}}"#).unwrap();
+        assert!(s.addon_on("addon"));
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert!(back.addon_on("future"));
         // Files from before add-ons have none on.
@@ -297,22 +251,14 @@ mod tests {
     }
 
     #[test]
-    fn prayer_defaults_follow_location_with_a_tone_ten_minutes_before() {
-        let p = Settings::default().prayer;
-        assert_eq!((p.place, p.follow_location, p.sound, p.remind_before_min, p.pause_music), (None, true, PrayerSound::Tone, 10, true));
-        let s: Settings = serde_json::from_str(r#"{"prayer":{"place":"jakarta","sound":"adzan","remind_before_min":600}}"#).unwrap();
-        let s = s.sanitized();
-        assert_eq!((s.prayer.place.as_deref(), s.prayer.sound, s.prayer.remind_before_min), (Some("jakarta"), PrayerSound::Adzan, 60));
-        assert!(s.prayer.follow_location);
-    }
-
-    #[test]
     fn theme_defaults_to_classic() {
         // Files written before themes existed keep the black island.
         let s: Settings = serde_json::from_str(r#"{"idle_style":"eyes"}"#).unwrap();
         assert_eq!(s.theme, Theme::Classic);
+        let s: Settings = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+        assert_eq!(s.theme, Theme::Light);
         let s: Settings = serde_json::from_str(r#"{"theme":"oyen"}"#).unwrap();
-        assert_eq!(s.theme, Theme::Oyen);
+        assert_eq!(s.theme, Theme::Light, "the old name reads as Light");
         let s: Settings = serde_json::from_str(r#"{"theme":"glass"}"#).unwrap();
         assert_eq!(s.theme, Theme::Glass);
         let s: Settings = serde_json::from_str(r#"{"theme":"pill"}"#).unwrap();

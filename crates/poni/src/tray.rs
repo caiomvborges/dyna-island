@@ -1,7 +1,6 @@
 //! Notification-area icon and its menu (also shown on right-click of the island).
 
 use crate::events::WM_APP_TRAY;
-use crate::state::OyenzaLink;
 use poni_core::settings::{IdleStyle, Settings, Theme};
 use windows::core::{Result, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
@@ -33,7 +32,7 @@ impl Tray {
                 hIcon: icon,
                 ..Default::default()
             };
-            let tip: Vec<u16> = format!("Oyenza Studio {}", crate::version::VERSION).encode_utf16().collect();
+            let tip: Vec<u16> = format!("Dyna Island {}", crate::version::VERSION).encode_utf16().collect();
             nid.szTip[..tip.len()].copy_from_slice(&tip);
             if !Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
                 return Err(windows::core::Error::from_win32());
@@ -56,8 +55,6 @@ pub enum MenuCmd {
     SetTheme(Theme),
     ToggleClipboard,
     ToggleSystemHistory,
-    ToggleLyrics,
-    TogglePronunciation,
     /// true: hide in full-screen apps; false: stay on top of them.
     SetHideFullscreen(bool),
     /// true: step aside while a maximized window is under the island;
@@ -73,25 +70,12 @@ pub enum MenuCmd {
     OpenSettings,
     ReloadSettings,
     OpenDataFolder,
-    /// "About Oyenza Studio 0.2.3 (…)": opens this version's release notes.
-    About,
-    /// "Lyrics by LRCLIB": opens lrclib.net.
-    LyricsCredit,
-    AppleMusicToken,
-    AppleMusicHelp,
-    AppleMusicForget,
-    OyenzaSignIn,
-    OyenzaCancel,
-    OyenzaDisconnect,
-    OyenzaOpen,
-    ToggleOyenzaAmounts,
-    RecordScreen,
     Quit,
 }
 
 pub enum MenuItem {
     Item { label: String, cmd: MenuCmd, checked: bool },
-    /// A greyed line that only says something ("Connected as …").
+    /// A greyed line that only says something ("About Dyna Island 0.2.3").
     Info { label: String },
     Sub { label: String, items: Vec<MenuItem> },
     Separator,
@@ -101,11 +85,10 @@ fn item(label: &str, cmd: MenuCmd, checked: bool) -> MenuItem {
     MenuItem::Item { label: label.to_string(), cmd, checked }
 }
 
-/// An idle look as the menu names it. In the Oyen theme the eyes are Oyen's own.
-fn idle_label(s: IdleStyle, theme: Theme) -> &'static str {
+/// An idle look as the menu names it.
+fn idle_label(s: IdleStyle) -> &'static str {
     match s {
         IdleStyle::Clock => "Clock",
-        IdleStyle::Eyes if theme == Theme::Oyen => "Oyen",
         IdleStyle::Eyes => "Eyes",
         IdleStyle::Minimal => "Minimal",
         IdleStyle::Hidden => "Hidden until hover",
@@ -113,24 +96,20 @@ fn idle_label(s: IdleStyle, theme: Theme) -> &'static str {
     }
 }
 
-pub fn menu_items(s: &Settings, pinned: bool, oyenza: &OyenzaLink, recorder: bool) -> Vec<MenuItem> {
+pub fn menu_items(s: &Settings, pinned: bool) -> Vec<MenuItem> {
     // The look the theme draws is the one checked: outside Pill, Status shows the clock.
     let shown = crate::pill::status::shown(s.theme, s.idle_style);
-    let style = |st: IdleStyle| item(idle_label(st, s.theme), MenuCmd::ToggleIdleStyle(st), shown == st);
+    let style = |st: IdleStyle| item(idle_label(st), MenuCmd::ToggleIdleStyle(st), shown == st);
     let theme = |label: &str, t: Theme| item(label, MenuCmd::SetTheme(t), s.theme == t);
     let fullscreen = |label: &str, hide: bool| item(label, MenuCmd::SetHideFullscreen(hide), s.hide_in_fullscreen == hide);
     let aside = |label: &str, on: bool| item(label, MenuCmd::SetStepAside(on), s.step_aside == on);
-    let mut items = vec![
+    vec![
         item("Keep island open", MenuCmd::TogglePinned, pinned),
-        MenuItem::Sub { label: "Theme".into(), items: vec![theme("Classic", Theme::Classic), theme("Oyen", Theme::Oyen), theme("Glass", Theme::Glass), theme("Pill", Theme::Pill)] },
+        MenuItem::Sub { label: "Theme".into(), items: vec![theme("Classic", Theme::Classic), theme("Light", Theme::Light), theme("Glass", Theme::Glass), theme("Pill", Theme::Pill)] },
         // The status bar is listed only in Pill, as on the Settings page: the
         // other themes would draw the clock for it.
         MenuItem::Sub { label: "Idle look".into(), items: crate::pill::status::looks(s.theme).iter().map(|l| style(*l)).collect() },
         MenuItem::Separator,
-        item("Synced lyrics", MenuCmd::ToggleLyrics, s.lyrics),
-        item("Lyrics pronunciation (romaji, pinyin, Korean)", MenuCmd::TogglePronunciation, s.lyrics_pronunciation),
-        apple_music_menu(),
-        oyenza_menu(s, oyenza),
         item("Clipboard history", MenuCmd::ToggleClipboard, s.clipboard_history),
         item("Keep System page history", MenuCmd::ToggleSystemHistory, s.system_history),
         item("Sounds", MenuCmd::ToggleSounds, s.sounds),
@@ -151,49 +130,11 @@ pub fn menu_items(s: &Settings, pinned: bool, oyenza: &OyenzaLink, recorder: boo
         item("Open settings file", MenuCmd::OpenSettings, false),
         item("Reload settings", MenuCmd::ReloadSettings, false),
         item("Open data folder", MenuCmd::OpenDataFolder, false),
-        item("Lyrics by LRCLIB", MenuCmd::LyricsCredit, false),
-        // Which version and build this is, as the Mac menu says it.
-        item(&crate::version::about_label(), MenuCmd::About, false),
+        // Which version and build this is (a greyed line: nothing to open).
+        MenuItem::Info { label: crate::version::about_label() },
         MenuItem::Separator,
-        item("Quit Oyenza Studio", MenuCmd::Quit, false),
-    ];
-    // Only once the separate recorder app is installed: until then the
-    // island doesn't mention recording at all.
-    if recorder {
-        items.splice(0..0, [item("Record this screen", MenuCmd::RecordScreen, false), MenuItem::Separator]);
-    }
-    items
-}
-
-/// Opt-in lyrics from Apple Music with the user's own token.
-fn apple_music_menu() -> MenuItem {
-    let on = crate::paths::apple_music_token_path().exists();
-    let mut items = vec![
-        item("Use token from clipboard", MenuCmd::AppleMusicToken, false),
-        item("How to get the token", MenuCmd::AppleMusicHelp, false),
-    ];
-    if on {
-        items.push(MenuItem::Separator);
-        items.push(item("Remove token", MenuCmd::AppleMusicForget, false));
-    }
-    MenuItem::Sub { label: if on { "Apple Music lyrics: on".into() } else { "Apple Music lyrics".into() }, items }
-}
-
-/// Oyenza, optional: sign in with a code from oyenza.app, then what the
-/// island may show, and signing out.
-fn oyenza_menu(s: &Settings, link: &OyenzaLink) -> MenuItem {
-    let items = match link {
-        OyenzaLink::Off => vec![item("Sign in to Oyenza…", MenuCmd::OyenzaSignIn, false)],
-        OyenzaLink::Connecting { .. } => vec![item("Cancel sign-in", MenuCmd::OyenzaCancel, false)],
-        OyenzaLink::Connected { account } => vec![
-            MenuItem::Info { label: format!("Connected as {account}") },
-            item("Show amounts on the island", MenuCmd::ToggleOyenzaAmounts, s.oyenza_show_amounts),
-            item("Open oyenza.app", MenuCmd::OyenzaOpen, false),
-            MenuItem::Separator,
-            item("Disconnect", MenuCmd::OyenzaDisconnect, false),
-        ],
-    };
-    MenuItem::Sub { label: "Oyenza".into(), items }
+        item("Quit Dyna Island", MenuCmd::Quit, false),
+    ]
 }
 
 fn build(menu: HMENU, items: &[MenuItem], cmds: &mut Vec<MenuCmd>) {
@@ -243,7 +184,7 @@ pub fn show_menu(owner: HWND, pt: POINT, items: &[MenuItem]) -> Option<MenuCmd> 
         let cmd = if idx == 0 { None } else { cmds.get(idx - 1).copied() };
         let launches = matches!(
             cmd,
-            Some(MenuCmd::OpenSettings | MenuCmd::OpenDataFolder | MenuCmd::About | MenuCmd::LyricsCredit | MenuCmd::AppleMusicHelp | MenuCmd::OyenzaOpen)
+            Some(MenuCmd::OpenSettings | MenuCmd::OpenDataFolder)
         );
         if !launches && !prev.is_invalid() && prev != owner && IsWindow(prev).as_bool() && GetForegroundWindow() == owner {
             let _ = SetForegroundWindow(prev);
@@ -257,7 +198,7 @@ mod tests {
     use super::*;
 
     fn fullscreen_choices(s: &Settings) -> Vec<(String, MenuCmd, bool)> {
-        let items = menu_items(s, false, &OyenzaLink::Off, false);
+        let items = menu_items(s, false);
         let Some(MenuItem::Sub { items, .. }) = items.into_iter().find(|i| matches!(i, MenuItem::Sub { label, .. } if label == "In full-screen apps")) else {
             panic!("no full-screen submenu");
         };
@@ -272,35 +213,18 @@ mod tests {
 
     #[test]
     fn the_menu_says_which_version_this_is() {
-        let items = menu_items(&Settings::default(), false, &OyenzaLink::Off, false);
-        let labels: Vec<(String, MenuCmd)> = items
-            .into_iter()
-            .filter_map(|i| match i {
-                MenuItem::Item { label, cmd, .. } => Some((label, cmd)),
-                _ => None,
-            })
-            .collect();
-        let at = |cmd: MenuCmd| labels.iter().position(|l| l.1 == cmd);
-        let about = at(MenuCmd::About).expect("no About line");
-        assert!(labels[about].0.starts_with(&format!("About Oyenza Studio {}", env!("CARGO_PKG_VERSION"))), "{}", labels[about].0);
-        // Right above Quit, with the lyrics credit kept above it.
-        assert_eq!(at(MenuCmd::Quit), Some(about + 1));
-        assert_eq!(at(MenuCmd::LyricsCredit), Some(about - 1));
-    }
-
-    #[test]
-    fn record_this_screen_shows_only_with_the_recorder() {
-        let s = Settings::default();
-        let first = |recorder: bool| match menu_items(&s, false, &OyenzaLink::Off, recorder).into_iter().next() {
-            Some(MenuItem::Item { label, cmd, .. }) => Some((label, cmd)),
-            _ => None,
-        };
-        assert_eq!(first(true), Some(("Record this screen".to_string(), MenuCmd::RecordScreen)));
-        assert_ne!(first(false).map(|(_, cmd)| cmd), Some(MenuCmd::RecordScreen));
+        let items = menu_items(&Settings::default(), false);
+        let about = items.iter().position(|i| matches!(i, MenuItem::Info { .. })).expect("no About line");
+        let MenuItem::Info { label } = &items[about] else { unreachable!() };
+        assert!(label.starts_with(&format!("About Dyna Island {}", env!("CARGO_PKG_VERSION"))), "{label}");
+        // Right above the separator before Quit, with Open data folder kept above it.
+        assert!(matches!(&items[about - 1], MenuItem::Item { cmd: MenuCmd::OpenDataFolder, .. }));
+        assert!(matches!(&items[about + 1], MenuItem::Separator));
+        assert!(matches!(&items[about + 2], MenuItem::Item { cmd: MenuCmd::Quit, .. }));
     }
 
     fn idle_choices(s: &Settings) -> Vec<(String, bool)> {
-        let items = menu_items(s, false, &OyenzaLink::Off, false);
+        let items = menu_items(s, false);
         let Some(MenuItem::Sub { items, .. }) = items.into_iter().find(|i| matches!(i, MenuItem::Sub { label, .. } if label == "Idle look")) else {
             panic!("no idle look submenu");
         };
@@ -321,7 +245,7 @@ mod tests {
         assert_eq!(idle_choices(&pill).last(), Some(&("Status bar".to_string(), true)));
         // Another theme draws the clock for the status bar: Clock is checked,
         // and Status comes back with Pill.
-        for theme in [Theme::Classic, Theme::Oyen, Theme::Glass] {
+        for theme in [Theme::Classic, Theme::Light, Theme::Glass] {
             let s = Settings { theme, ..pill.clone() };
             let choices = idle_choices(&s);
             assert_eq!(choices.len(), 4, "{theme:?}");
@@ -335,7 +259,7 @@ mod tests {
         let mut s = Settings::default();
         for on in [true, false] {
             s.step_aside = on;
-            let items = menu_items(&s, false, &OyenzaLink::Off, false);
+            let items = menu_items(&s, false);
             let at = |name: &str| items.iter().position(|i| matches!(i, MenuItem::Sub { label, .. } if label == name));
             let (Some(fs), Some(i)) = (at("In full-screen apps"), at("Over maximized windows")) else {
                 panic!("no maximized windows submenu");

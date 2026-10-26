@@ -1,36 +1,26 @@
 //! Settings page, behind the gear on the right of the header.
 //!
-//! The Oyenza account comes first: the Oyenza app's icon, then signing in
-//! (the code itself shows on the Oyenza page), who is signed in, and
-//! Disconnect. Under a line, what the tray menu also changes: the theme and
+//! What the tray menu also changes: the theme and
 //! the idle look as pickers, five switches, Hide or Stay on top in
 //! full-screen apps, and (Windows) Step aside or Stay over maximized windows.
 //! A change saves at once and applies the way the tray's does
 //! (`Command::SaveSettings`).
 
-use crate::commands::{Command, OyenzaCmd};
+use crate::commands::Command;
 use crate::gfx::{TextStyle, Weight};
-use crate::pages::PageKind;
 use crate::pill::status;
-use crate::state::{AppState, OyenzaLink};
-use crate::ui::{wid, wid_n, PillStyle, Ui, PILL_GAP, PILL_REGULAR, PILL_SMALL};
+use crate::state::AppState;
+use crate::ui::{wid_n, Ui, PILL_SMALL};
 use poni_core::geom::{palette, Color, Point, Rect};
-use poni_core::oyenza;
 use poni_core::settings::{IdleStyle, Theme};
 
-/// Account row, a line, the pickers under their labels (or a row each on a
-/// narrow island), then the switches and choices: four rows on Windows,
-/// three on a Mac. Shorter than the System page (256), so the window keeps
-/// its size.
+/// The pickers under their labels (or a row each on a narrow island), then
+/// the switches and choices: three rows. Shorter than the System page (256),
+/// so the window keeps its size.
 const HEIGHT: f32 = SWITCHES_Y + ROWS as f32 * ROW_H;
-const ACCOUNT_H: f32 = 44.0;
-/// The Oyenza app's icon, and the text column right of it.
-const ICON: f32 = 36.0;
-const TEXT_X: f32 = 48.0;
-const RULE_Y: f32 = 54.0;
-const LABELS_Y: f32 = 62.0;
-const PICKERS_Y: f32 = 80.0;
-const SWITCHES_Y: f32 = 114.0;
+const LABELS_Y: f32 = 4.0;
+const PICKERS_Y: f32 = 22.0;
+const SWITCHES_Y: f32 = 56.0;
 const ROW_H: f32 = 28.0;
 const COL_GAP: f32 = 24.0;
 /// A row's hover wash reaches this far past its text and switch.
@@ -45,20 +35,18 @@ const SEG_PAD_MIN: f32 = 7.5;
 /// Where they still don't fit (a narrow island), each takes a row, its
 /// label on the left, in the room the labels-above layout uses, so the page
 /// keeps its height.
-const STACK_Y: [f32; 2] = [58.0, 86.0];
+const STACK_Y: [f32; 2] = [0.0, 28.0];
 const STACK_GAP: f32 = 16.0;
 /// The full-screen choice's picker, inside its row.
 const ROW_PICKER_H: f32 = 24.0;
 const SWITCH_W: f32 = 30.0;
 const SWITCH_H: f32 = 18.0;
 const KNOB_INSET: f32 = 2.0;
-/// Oyenza's colour, as on the Oyenza page.
-const OYENZA: Color = palette::ORANGE;
 
-// Glass: on Windows from a copy of the screen, on a Mac macOS's own glass.
-const THEMES: [(Theme, &str); 4] = [(Theme::Classic, "Classic"), (Theme::Oyen, "Oyen"), (Theme::Glass, "Glass"), (Theme::Pill, "Pill")];
+// Glass: from a copy of the screen.
+const THEMES: [(Theme, &str); 4] = [(Theme::Classic, "Classic"), (Theme::Light, "Light"), (Theme::Glass, "Glass"), (Theme::Pill, "Pill")];
 
-/// An idle look's name in the picker (`eyes` is Oyen in his theme).
+/// An idle look's name in the picker.
 fn idle_name(s: IdleStyle, eyes: &'static str) -> &'static str {
     match s {
         IdleStyle::Clock => "Clock",
@@ -69,11 +57,9 @@ fn idle_name(s: IdleStyle, eyes: &'static str) -> &'static str {
     }
 }
 
-/// The five switches, as the tray menu names them.
+/// The three switches, as the tray menu names them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Switch {
-    Lyrics,
-    Pronunciation,
     Sounds,
     Clipboard,
     Autostart,
@@ -86,17 +72,12 @@ enum Switch {
 enum Row {
     Switch(Switch, &'static str),
     Fullscreen,
-    #[cfg_attr(not(windows), allow(dead_code))]
     Aside,
 }
 
-const LEFT: &[Row] = &[Row::Switch(Switch::Lyrics, "Synced lyrics"), Row::Switch(Switch::Pronunciation, "Lyrics pronunciation"), Row::Switch(Switch::Sounds, "Sounds")];
-/// The maximized-window choice sits under the full-screen one. A Mac has
-/// none: its menu bar keeps windows below the island.
-#[cfg(windows)]
-const RIGHT: &[Row] = &[Row::Switch(Switch::Clipboard, "Clipboard history"), Row::Fullscreen, Row::Aside, Row::Switch(Switch::Autostart, "Start with Windows")];
-#[cfg(not(windows))]
-const RIGHT: &[Row] = &[Row::Switch(Switch::Clipboard, "Clipboard history"), Row::Fullscreen, Row::Switch(Switch::Autostart, "Start with Windows")];
+const LEFT: &[Row] = &[Row::Switch(Switch::Sounds, "Sounds"), Row::Switch(Switch::Clipboard, "Clipboard history"), Row::Switch(Switch::Autostart, "Start with Windows")];
+/// The maximized-window choice sits under the full-screen one.
+const RIGHT: &[Row] = &[Row::Fullscreen, Row::Aside];
 const COLUMNS: [&[Row]; 2] = [LEFT, RIGHT];
 /// Rows in the taller column.
 const ROWS: usize = if LEFT.len() > RIGHT.len() { LEFT.len() } else { RIGHT.len() };
@@ -112,16 +93,7 @@ pub fn height(_st: &AppState) -> f32 {
     HEIGHT
 }
 
-/// While a sign-in code waits, its time left counts down each second.
-pub fn next_wake(st: &AppState) -> Option<f64> {
-    matches!(st.oyenza.link, OyenzaLink::Connecting { .. }).then(|| st.now.floor() + 1.0)
-}
-
 pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
-    draw_account(ui, st, Rect::new(area.x, area.y, area.w, ACCOUNT_H));
-    let px = 1.0 / ui.c.scale().max(0.5);
-    ui.c.fill_rect(Rect::new(area.x, area.y + RULE_Y, area.w, px), Color::white(0.10));
-
     let col_w = ((area.w - COL_GAP) / 2.0).max(0.0);
     let cols = [area.x, area.x + col_w + COL_GAP];
     let label_st = TextStyle::caption().weight(Weight::Semibold).color(palette::TEXT_FAINT);
@@ -130,13 +102,12 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     let theme_names: Vec<&str> = THEMES.iter().map(|t| t.1).collect();
     let theme_sel = THEMES.iter().position(|t| t.0 == st.settings.theme).unwrap_or(0);
     let looks = status::looks(st.settings.theme);
-    // In the Oyen theme the eyes are Oyen's own (as in the tray menu).
-    let eyes = if st.settings.theme == Theme::Oyen { "Oyen" } else { "Eyes" };
+    let eyes = "Eyes";
     let look_names: Vec<&str> = looks.iter().map(|s| idle_name(*s, eyes)).collect();
     let look_sel = looks.iter().position(|s| *s == status::shown(st.settings.theme, st.settings.idle_style)).unwrap_or(0);
     // Side by side under their labels when both fit their columns, each
     // closed up only as far as it needs; else a row each. Whether they fit is
-    // asked of this theme's own looks, so Classic, Oyen and Glass sit side by
+    // asked of this theme's own looks, so Classic, Light and Glass sit side by
     // side exactly where they always did (at a narrow island picking Pill,
     // with its fifth look, can stack them).
     let theme_pad = pad_to_fit(ui, &theme_names, col_w);
@@ -220,8 +191,6 @@ fn choice_row(ui: &mut Ui, r: Rect, label: &str, id: &str, names: &[&str], sel: 
 fn switch_on(st: &AppState, sw: Switch) -> Option<bool> {
     let s = &st.settings;
     match sw {
-        Switch::Lyrics => Some(s.lyrics),
-        Switch::Pronunciation => Some(s.lyrics_pronunciation),
         Switch::Sounds => Some(s.sounds),
         Switch::Clipboard => Some(s.clipboard_history),
         Switch::Autostart => st.ui.autostart,
@@ -231,8 +200,6 @@ fn switch_on(st: &AppState, sw: Switch) -> Option<bool> {
 fn flip(st: &mut AppState, sw: Switch, on: Option<bool>) {
     let s = &mut st.settings;
     match sw {
-        Switch::Lyrics => s.lyrics = !s.lyrics,
-        Switch::Pronunciation => s.lyrics_pronunciation = !s.lyrics_pronunciation,
         Switch::Sounds => s.sounds = !s.sounds,
         // Off forgets the history, pinned items included (as from the tray).
         Switch::Clipboard => s.clipboard_history = !s.clipboard_history,
@@ -244,65 +211,6 @@ fn flip(st: &mut AppState, sw: Switch, on: Option<bool>) {
         }
     }
     st.cmd(Command::SaveSettings);
-}
-
-// ---------------------------------------------------------------- account
-
-fn draw_account(ui: &mut Ui, st: &mut AppState, r: Rect) {
-    let cy = r.center().y;
-    crate::oyen::app_icon(ui.c, Point::new(r.x + ICON / 2.0, cy), ICON);
-    match st.oyenza.link.clone() {
-        OyenzaLink::Off => {
-            let label = "Sign in with Oyenza";
-            let w = ui.pill_width(label, false, false);
-            let b = Rect::new(r.right() - w, cy - PILL_REGULAR / 2.0, w, PILL_REGULAR);
-            if ui.pill(wid("settings.sign-in"), b, label, None, PillStyle::Primary(OYENZA)).clicked {
-                st.cmd(Command::Oyenza(OyenzaCmd::SignIn));
-            }
-            account_text(ui, r, b.x, "Oyenza", "Sign in to see money in and bills due here.");
-        }
-        OyenzaLink::Connecting { code, until, .. } => {
-            let cancel_w = ui.pill_width("Cancel", false, true);
-            let cancel = Rect::new(r.right() - cancel_w, cy - PILL_SMALL / 2.0, cancel_w, PILL_SMALL);
-            if ui.pill(wid("settings.cancel"), cancel, "Cancel", None, PillStyle::Utility).clicked {
-                st.cmd(Command::Oyenza(OyenzaCmd::Cancel));
-            }
-            let show_w = ui.pill_width("Show code", false, true);
-            let show = Rect::new(cancel.x - PILL_GAP - show_w, cancel.y, show_w, PILL_SMALL);
-            if ui.pill(wid("settings.show-code"), show, "Show code", None, PillStyle::Primary(OYENZA)).clicked {
-                st.cmd(Command::SetPage(PageKind::Oyenza));
-            }
-            let line = format!("Code {code} · works for {}", oyenza::code_time_left(until - st.now));
-            account_text(ui, r, show.x, "Signing in to Oyenza", &line);
-        }
-        OyenzaLink::Connected { account } => {
-            let dis_w = ui.pill_width("Disconnect", false, true);
-            let dis = Rect::new(r.right() - dis_w, cy - PILL_SMALL / 2.0, dis_w, PILL_SMALL);
-            if ui.pill(wid("settings.disconnect"), dis, "Disconnect", None, PillStyle::Utility).clicked {
-                st.cmd(Command::Oyenza(OyenzaCmd::Disconnect));
-            }
-            // Sums and senders straight away on the island (off: they wait for Show).
-            let label = "Show amounts";
-            let lw = ui.c.measure(label, &TextStyle::body(), 300.0).0.ceil();
-            let row = Rect::new(dis.x - 2.0 * ROW_BLEED - lw - 10.0 - SWITCH_W, cy - ROW_H / 2.0, lw + 10.0 + SWITCH_W, ROW_H);
-            let on = st.settings.oyenza_show_amounts;
-            if switch_row(ui, wid("settings.amounts"), row, label, Some(on), st.accent) {
-                st.settings.oyenza_show_amounts = !on;
-                st.cmd(Command::SaveSettings);
-            }
-            account_text(ui, r, row.x - ROW_BLEED, "Oyenza", &format!("Signed in as {account}"));
-        }
-    }
-}
-
-/// The account's name over one dim line, between Oyen and `right` (where
-/// the row's buttons start).
-fn account_text(ui: &mut Ui, r: Rect, right: f32, title: &str, line: &str) {
-    let x = r.x + TEXT_X;
-    let w = (right - 16.0 - x).max(0.0);
-    let cy = r.center().y;
-    ui.c.text(title, Rect::new(x, cy - 19.0, w, 20.0), &TextStyle::headline());
-    ui.c.text(line, Rect::new(x, cy + 1.0, w, 17.0), &TextStyle::footnote().color(palette::TEXT_DIM));
 }
 
 // ---------------------------------------------------------------- widgets

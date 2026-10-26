@@ -64,6 +64,7 @@ pub fn adler32(data: &[u8]) -> u32 {
 // ---------------------------------------------------------------- pixels
 
 /// Premultiplied BGRA (Direct2D / GDI layout) → straight RGBA.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn pbgra_to_rgba(pbgra: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(pbgra.len() / 4 * 4);
     for px in pbgra.as_chunks::<4>().0 {
@@ -109,6 +110,7 @@ pub fn encode_gray(w: u32, h: u32, gray: &[u8]) -> Vec<u8> {
 }
 
 /// Save premultiplied BGRA pixels (as produced by the renderer) as an RGBA PNG.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn save_pbgra(path: impl AsRef<Path>, w: u32, h: u32, pbgra: &[u8]) -> Result<(), String> {
     check_len(path.as_ref(), w, h, 4, pbgra.len())?;
     write_file(path.as_ref(), &encode_rgba(w, h, &pbgra_to_rgba(pbgra)))

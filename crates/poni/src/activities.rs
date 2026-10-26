@@ -1,5 +1,5 @@
 //! What the collapsed island shows: idle pill, live activities (media,
-//! timer, the minutes before a prayer, the readout over games), HUD
+//! timer, the readout over games), HUD
 //! pop-ups (volume, charging, Bluetooth) and notices.
 //!
 //! Collapsed pills are sized to their content: Windows has no camera
@@ -8,7 +8,6 @@
 use crate::gfx::{TextStyle, Weight};
 use crate::icons::Icon;
 use crate::island::Geom;
-use crate::oyen;
 use crate::pages::{self, PageKind};
 use crate::state::{AppState, FpsAccess, HudKind, InlineAction};
 use crate::ui::{wid, PillStyle, Ui, PILL_SMALL};
@@ -24,10 +23,10 @@ pub enum Activity {
     Media,
     Timer,
     MediaTimer,
-    /// Prayer times: the minutes before the next prayer.
-    Prayer,
     /// Show over games: frame rate, GPU and CPU while a full-screen app is in front.
     Game,
+    /// The Outlook agenda add-on: the next meeting, from 15 minutes before it.
+    Meeting,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,20 +71,14 @@ const BOLT_INSET: f32 = BOLT * 5.0 / 24.0;
 const BOLT_VISIBLE: f32 = BOLT * 14.0 / 24.0;
 /// Gap between the idle clock and its battery badge.
 const BADGE_GAP: f32 = 6.0;
-/// Oyen theme: the head's width (DIPs) in the idle "Oyen" look, beside the
-/// idle clock and in the media pill, and the clock pill's extra width for him.
-const OYEN_IDLE_W: f32 = 30.0;
-const OYEN_CLOCK_W: f32 = 22.0;
-const OYEN_MEDIA_W: f32 = 24.0;
-const OYEN_CLOCK_LEAD: f32 = 12.0 + OYEN_CLOCK_W;
-/// The countdown before a prayer: the moon, then "Maghrib 10 min".
-const PRAYER_W: f32 = 168.0;
 /// The readout over games: room for "999 fps", "GPU 100% · 100°" and
 /// "CPU 100%" with dividers (tabular digits keep it still as numbers
 /// change), and without the temperature when the driver reports none.
 const GAME_W: f32 = 276.0;
 const GAME_NO_TEMP_W: f32 = 236.0;
 const GAME_DIVIDER: Color = Color::white(0.18);
+/// The next meeting: the calendar, its subject, and "in 8 min".
+pub(crate) const MEETING_W: f32 = 280.0;
 
 /// Modes with the same key share content (no cross-fade between them).
 pub fn content_key(m: &Mode) -> u32 {
@@ -94,8 +87,8 @@ pub fn content_key(m: &Mode) -> u32 {
         Mode::Activity(Activity::Media) => 2,
         Mode::Activity(Activity::Timer) => 3,
         Mode::Activity(Activity::MediaTimer) => 4,
-        Mode::Activity(Activity::Prayer) => 5,
         Mode::Activity(Activity::Game) => 6,
+        Mode::Activity(Activity::Meeting) => 7,
         Mode::Hud(t) => 10 + *t as u32,
         Mode::Notice => 20,
         Mode::Expanded(_) => 30,
@@ -122,23 +115,15 @@ fn media_grace_end(st: &AppState) -> Option<f64> {
     st.media_paused_at.map(|t| t + MEDIA_GRACE)
 }
 
-/// The prayer coming up and the minutes left, while its countdown runs.
-pub fn prayer_countdown(st: &AppState) -> Option<(poni_core::prayer::Prayer, i64)> {
-    if !st.prayer_on() {
-        return None;
-    }
-    let site = st.prayer.site()?;
-    poni_core::prayer::countdown(&site, st.prayer_now(), st.settings.prayer.remind_before_min).map(|(m, left)| (m.prayer, left))
-}
-
 pub fn current_activity(st: &AppState) -> Option<Activity> {
-    // The few minutes before a prayer come first: they don't come back.
-    if prayer_countdown(st).is_some() {
-        return Some(Activity::Prayer);
-    }
     // Over a game the readout takes the pill; music and timer wait.
     if st.game.active {
         return Some(Activity::Game);
+    }
+    // A meeting about to start comes before the music and the timer: it
+    // doesn't come back.
+    if st.meeting_countdown().is_some() {
+        return Some(Activity::Meeting);
     }
     let media = st.settings.show_media_activity
         && st.media.as_ref().is_some_and(|m| m.is_playing() || media_grace_end(st).is_some_and(|end| st.now < end));
@@ -211,31 +196,15 @@ pub fn geom(m: &Mode, st: &AppState) -> Geom {
                     Some(ClockBadge::Low(_)) => 34.0,
                     None => 0.0,
                 };
-                let lead = if oyen::on(st.settings.theme) { OYEN_CLOCK_LEAD } else { 0.0 };
-                Geom::new(base + badge + lead, 30.0, 14.0)
+                Geom::new(base + badge, 30.0, 14.0)
             }
             IdleStyle::Minimal => Geom::new(150.0, 26.0, 12.0),
-            // A little taller than the eyes, so his ears clear the top edge.
-            IdleStyle::Eyes if oyen::on(st.settings.theme) => Geom::new(104.0, 36.0, 16.0),
             IdleStyle::Eyes => Geom::new(118.0, 30.0, 14.0),
             IdleStyle::Hidden => hidden_strip(),
         },
         Mode::Activity(Activity::Media) => {
-            // A song with synced lyrics sings its line here, as in the Pill
-            // theme: the pill is as wide as its words (`pill::media`), and
-            // two rows tall when they have readings, the line over them.
-            let w = if crate::pill::lyric::sings(st) {
-                crate::pill::media::fit_w()
-            } else if st.now < st.ui.peek_until {
-                MEDIA_PEEK_W
-            } else {
-                MEDIA_W
-            };
-            if crate::pill::lyric::reads(st) {
-                Geom::new(w, crate::pill::media::H_READS, 22.0)
-            } else {
-                Geom::new(w, 32.0, 15.0)
-            }
+            let w = if st.now < st.ui.peek_until { MEDIA_PEEK_W } else { MEDIA_W };
+            Geom::new(w, 32.0, 15.0)
         }
         Mode::Activity(Activity::Timer) => {
             // "MM:SS" until the countdown needs another digit.
@@ -243,8 +212,8 @@ pub fn geom(m: &Mode, st: &AppState) -> Geom {
             Geom::new(if long { 112.0 } else { 96.0 }, 32.0, 15.0)
         }
         Mode::Activity(Activity::MediaTimer) => Geom::new(132.0, 32.0, 15.0),
-        Mode::Activity(Activity::Prayer) => Geom::new(PRAYER_W, 32.0, 15.0),
         Mode::Activity(Activity::Game) => Geom::new(if game_temp(st).is_some() { GAME_W } else { GAME_NO_TEMP_W }, 32.0, 15.0),
+        Mode::Activity(Activity::Meeting) => Geom::new(MEETING_W, 32.0, 15.0),
         Mode::Hud(HudTag::Volume) => Geom::new(316.0, 40.0, 19.0),
         Mode::Hud(HudTag::Charging) | Mode::Hud(HudTag::LowBattery) => Geom::new(300.0, 40.0, 19.0),
         Mode::Hud(HudTag::Bluetooth) => Geom::new(336.0, 46.0, 22.0),
@@ -264,16 +233,13 @@ fn hidden_strip() -> Geom {
 }
 
 /// Needs continuous ambient frames (near 60 fps): animated equalizer while music plays.
-/// A paused (lingering) pill is static, once Oyen's notes are gone.
+/// A paused (lingering) pill is static.
 pub fn is_live(m: &Mode, st: &AppState) -> bool {
     if let Some(live) = crate::pill::is_live(m, st) {
         return live;
     }
     let Some(media) = st.media.as_ref() else { return false };
     match m {
-        Mode::Activity(Activity::Media) if oyen::on(st.settings.theme) => {
-            oyen::music_moving(st.now, media.is_playing(), st.media_paused_at, &st.ui.notes)
-        }
         Mode::Activity(Activity::Media) | Mode::Activity(Activity::MediaTimer) => media.is_playing(),
         _ => false,
     }
@@ -290,11 +256,7 @@ pub fn next_wake(m: &Mode, st: &AppState) -> Option<f64> {
             next = Some(next.map_or(t, |n: f64| n.min(t)));
         }
     };
-    if *m == Mode::Idle && oyen_idle(st) {
-        if !night(st) {
-            consider(oyen::next_rest_move(now));
-        }
-    } else if *m == Mode::Idle && st.settings.idle_style == IdleStyle::Eyes {
+    if *m == Mode::Idle && st.settings.idle_style == IdleStyle::Eyes {
         let phase = now % BLINK_PERIOD;
         consider(if phase < BLINK_LEN { now - phase + BLINK_LEN } else { now - phase + BLINK_PERIOD });
     }
@@ -305,10 +267,12 @@ pub fn next_wake(m: &Mode, st: &AppState) -> Option<f64> {
     }
     if *m == Mode::Activity(Activity::Media) {
         consider(st.ui.peek_until);
-        // The next sung line: the equalizer's frames stop while paused or
-        // on battery saver, and Oyen's when his notes are gone.
-        if let Some(t) = crate::pill::lyric::next_wake(st) {
-            consider(t);
+    }
+    if *m == Mode::Activity(Activity::Meeting) {
+        // "in 8 min" turns into "in 7 min" on the minute before the start.
+        if let Some((_, until)) = st.meeting_countdown() {
+            let step = if until > 0 { (until - 1).rem_euclid(60) + 1 } else { 60 };
+            consider(now + step as f64 + 0.05);
         }
     }
     if let Some(t) = crate::pill::next_wake(m, st) {
@@ -319,26 +283,6 @@ pub fn next_wake(m: &Mode, st: &AppState) -> Option<f64> {
 
 const BLINK_PERIOD: f64 = 5.5;
 const BLINK_LEN: f64 = 0.14;
-
-/// Oyen shows in the idle pill (the clock and "Oyen" looks of his theme).
-fn oyen_idle(st: &AppState) -> bool {
-    oyen::on(st.settings.theme) && matches!(st.settings.idle_style, IdleStyle::Clock | IdleStyle::Status | IdleStyle::Eyes)
-}
-
-/// Oyen sleeps from midnight to five.
-fn night(st: &AppState) -> bool {
-    st.local.hour < 5
-}
-
-/// Oyen at rest in the idle pill; he follows the cursor while it hovers.
-fn draw_oyen_rest(ui: &mut Ui, st: &AppState, body: Rect, cx: f32, w: f32, bar_y: f32) {
-    let look = ui.input.mouse.map(|p| (p.x - body.center().x) / (body.w / 2.0));
-    let (frame, moving) = oyen::rest(st.now, night(st), look);
-    if moving {
-        ui.request_anim();
-    }
-    oyen::peek(ui.c, &frame, cx, bar_y, w, body.y + 1.0);
-}
 
 pub fn draw(ui: &mut Ui, st: &mut AppState, m: &Mode, body: Rect) {
     if crate::pill::draw(ui, st, m, body) {
@@ -364,13 +308,6 @@ fn draw_idle(ui: &mut Ui, st: &mut AppState, body: Rect) {
     let cy = body.center().y;
     match st.settings.idle_style {
         IdleStyle::Clock | IdleStyle::Status => {
-            // Oyen theme: he peeks on the left and the clock centres in the rest.
-            let body = if oyen::on(st.settings.theme) {
-                draw_oyen_rest(ui, st, body, body.x + 11.0 + OYEN_CLOCK_W / 2.0, OYEN_CLOCK_W, body.bottom() - 5.0);
-                Rect::new(body.x + OYEN_CLOCK_LEAD, body.y, body.w - OYEN_CLOCK_LEAD, body.h)
-            } else {
-                body
-            };
             let time = fmt_clock(&st.local, st.settings.use_24h);
             let ts = TextStyle::body().weight(Weight::Semibold).tabular();
             let Some(badge) = clock_badge(st) else {
@@ -396,9 +333,6 @@ fn draw_idle(ui: &mut Ui, st: &mut AppState, body: Rect) {
                 ClockBadge::Low(_) => ui.c.text(&pct, Rect::new(x0, body.y, bw + 2.0, body.h), &pct_ts),
             }
             ui.c.text(&time, Rect::new(x0 + bw + BADGE_GAP, body.y, tw + 2.0, body.h), &ts);
-        }
-        IdleStyle::Eyes if oyen::on(st.settings.theme) => {
-            draw_oyen_rest(ui, st, body, body.center().x, OYEN_IDLE_W, body.bottom() - 7.0);
         }
         IdleStyle::Eyes => {
             let blink = (st.now % BLINK_PERIOD) < BLINK_LEN;
@@ -486,41 +420,37 @@ fn draw_peek(ui: &mut Ui, st: &AppState, x0: f32, x1: f32, body: Rect, alpha: f3
     });
 }
 
-/// Music, collapsed: the album art on the left, the equalizer (Oyen, in his
-/// theme) on the right, and between them the line being sung while the song
-/// has synced lyrics, as in the Pill theme (`pill::media::middle`: the line,
-/// with its reading in Latin letters under it when it has one, or the title
-/// in the intro, the breaks and a new track's peek), else a new track's
-/// title for a moment. In the menu bar's line of a MacBook with a
-/// notch the camera takes the middle, so there it draws no words (`words`
-/// false): a sung line hangs below the notch instead (`mac/notch.rs`).
+/// Music, collapsed: the album art on the left, the equalizer on the right, and between them a new track's title for a moment.
+/// In the menu bar's line of a MacBook with a notch the camera takes the
+/// middle, so there it draws no words (`words` false).
 pub fn draw_music(ui: &mut Ui, st: &mut AppState, body: Rect, words: bool) {
     let cy = body.center().y;
     let art = Rect::new(body.x + 12.0, cy - 11.0, 22.0, 22.0);
     let playing = st.media.as_ref().is_some_and(|m| m.is_playing());
     art_or_icon(ui, st, art, playing);
     let eq = Rect::new(body.right() - 34.0, cy - 8.0, 20.0, 16.0);
-    let sings = words && crate::pill::lyric::sings(st);
-    let alpha = if sings { 1.0 } else { peek_alpha(st, body.w) };
-    if oyen::on(st.settings.theme) {
-        // Oyen bops to the music where the equalizer would be, and a
-        // note floats up beside him on every beat (the ones on his
-        // left make way for the words: the sung line or the title).
-        let (cx, bar_y) = (body.right() - 26.0, body.bottom() - 5.0);
-        st.ui.notes.step(st.now, playing);
-        let sky = Rect::new(body.x, body.y + 1.0, body.w, body.h - 1.0);
-        oyen::notes(ui.c, &st.ui.notes, st.now, cx, bar_y, sky, 1.0 - alpha);
-        let f = oyen::music(st.now, playing, st.media_paused_at);
-        oyen::peek(ui.c, &f, cx, bar_y, OYEN_MEDIA_W, body.y + 1.0);
-    } else {
-        equalizer(ui, eq, st.media_accent(), playing, st.now);
-    }
-    if sings {
-        use crate::pill::media::{middle, PAUSED_TEXT, TEXT_CLEAR};
-        middle(ui, st, body, art.right() + TEXT_CLEAR, eq.x - TEXT_CLEAR, if playing { 1.0 } else { PAUSED_TEXT });
-    } else if alpha > 0.01 {
+    let alpha = if words { peek_alpha(st, body.w) } else { 0.0 };
+    equalizer(ui, eq, st.media_accent(), playing, st.now);
+    if alpha > 0.01 {
         draw_peek(ui, st, art.right() + 10.0, eq.x - 10.0, body, alpha);
     }
+}
+
+/// The next meeting, collapsed: the calendar, the subject, and how long until
+/// it starts in the accent (shared with the Pill theme's capsule).
+pub(crate) fn draw_meeting(ui: &mut Ui, st: &AppState, body: Rect) {
+    let Some((m, until)) = st.meeting_countdown() else { return };
+    let cy = body.center().y;
+    let col = st.accent;
+    ui.c.icon(Icon::Agenda, Rect::new(body.x + 14.0, cy - 8.0, 16.0, 16.0), col);
+    let when = poni_core::agenda::fmt_until(until);
+    let when_st = TextStyle::body().weight(Weight::Semibold).tabular().color(col).right();
+    let ww = ui.c.measure(&when, &when_st, 200.0).0.ceil();
+    let right = body.right() - 16.0;
+    ui.c.text(&when, Rect::new(right - ww - 2.0, body.y, ww + 2.0, body.h), &when_st);
+    let x = body.x + 38.0;
+    let subject = if m.subject.is_empty() { "Meeting" } else { m.subject.as_str() };
+    ui.c.text(subject, Rect::new(x, body.y, (right - ww - 10.0 - x).max(0.0), body.h), &TextStyle::body().weight(Weight::Semibold));
 }
 
 fn draw_activity(ui: &mut Ui, st: &mut AppState, a: Activity, body: Rect) {
@@ -545,16 +475,8 @@ fn draw_activity(ui: &mut Ui, st: &mut AppState, a: Activity, body: Rect) {
             let text = fmt_countdown(p.remaining(st.now));
             ui.c.text(&text, Rect::new(body.x + 40.0, body.y, 64.0, body.h), &countdown_style(col, paused));
         }
-        Activity::Prayer => {
-            // No Oyen here, in any theme: the moon and the minutes only.
-            let Some((prayer, left)) = prayer_countdown(st) else { return };
-            let col = st.accent;
-            ui.c.icon(Icon::Moon, Rect::new(body.x + 14.0, cy - 8.0, 16.0, 16.0), col);
-            let text = format!("{} {left} min", prayer.name());
-            let ts = TextStyle::body().weight(Weight::Semibold).tabular().color(col).right();
-            ui.c.text(&text, Rect::new(body.x + 36.0, body.y, body.w - 36.0 - 16.0, body.h), &ts);
-        }
         Activity::Game => draw_game(ui, st, body),
+        Activity::Meeting => draw_meeting(ui, st, body),
         Activity::MediaTimer => {
             // Art on the left; the ring sits right next to its countdown.
             art_or_icon(ui, st, art, playing);
@@ -651,7 +573,7 @@ fn draw_hud(ui: &mut Ui, st: &mut AppState, body: Rect) {
             st.ui.hud_level = shown;
             ui.c.fill_rrect(bar, 3.0, palette::TRACK);
             if shown > 0.0 {
-                // Classic fills the level in white; a look with its own accent (Oyen's) in it.
+                // Classic fills the level in white; a look with its own accent (Light's amber) in it.
                 let level = match ui.c.look().accent {
                     Some(a) => a,
                     None => Color::white(0.95),
@@ -718,9 +640,6 @@ fn battery_badge(ui: &mut Ui, right: f32, cy: f32, percent: u8, color: Color) ->
 fn inline_done(st: &AppState, a: InlineAction) -> bool {
     match a {
         InlineAction::StartFocus => st.pomodoro.is_active(),
-        // Oyenza: the sum is in place once Show took it.
-        InlineAction::ShowAmount => st.notice.as_ref().is_some_and(|n| n.reveal.is_none()),
-        InlineAction::StopAdzan => !st.prayer.adzan,
     }
 }
 
@@ -736,8 +655,6 @@ fn draw_notice(ui: &mut Ui, st: &mut AppState, body: Rect) {
         let (label, icon, color) = match a {
             // Orange for focus; a break starts in its own green.
             InlineAction::StartFocus => ("Start".to_string(), Icon::Play, phase_color(st.pomodoro.phase)),
-            InlineAction::ShowAmount => ("Show".to_string(), Icon::Eye, n.color),
-            InlineAction::StopAdzan => ("Stop".to_string(), Icon::Stop, n.color),
         };
         let w = ui.pill_width(&label, true, true).max(76.0);
         let r = Rect::new(body.right() - 16.0 - w, cy - PILL_SMALL / 2.0, w, PILL_SMALL);
@@ -766,14 +683,13 @@ fn draw_notice(ui: &mut Ui, st: &mut AppState, body: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{LyricsState, LyricsStatus, MediaSession};
-    use poni_core::lrc::parse_lrc;
+    use crate::state::MediaSession;
     use poni_core::settings::Settings;
     use poni_core::store::Store;
     use poni_core::timeline::Timeline;
 
-    /// Music playing 12 s into a song, with these lyrics found for it.
-    fn playing(lrc: Option<&str>) -> AppState {
+    /// Music playing 12 s into a song.
+    fn playing() -> AppState {
         let mut st = AppState::new(Settings::default(), Store::default());
         let key = MediaSession::make_track_key("Paper Boats", "The Lanterns", "");
         st.media = Some(MediaSession {
@@ -789,50 +705,12 @@ mod tests {
             can_next: true,
             can_play_pause: true,
             can_seek: true,
-            track_key: key.clone(),
+            track_key: key,
         });
-        if let Some(l) = lrc {
-            st.lyrics = LyricsState { track_key: key, status: LyricsStatus::Found, lyrics: Some(parse_lrc(l)), source: "Sample".into(), ruby: Vec::new(), wants_ja_readings: false };
-        }
         st
     }
 
-    #[test]
-    fn music_sings_its_line_in_every_theme_while_the_song_has_synced_lyrics() {
-        let media = Mode::Activity(Activity::Media);
-        // No lyrics: Classic's compact pill, art and bars.
-        assert_eq!(geom(&media, &playing(None)).w, MEDIA_W);
-        // Synced lyrics: as wide as its words (what `pill::media` measured).
-        let sung = playing(Some("[00:10.00]Paper lanterns on the line\n[00:14.00]Count the windows\n"));
-        assert!(crate::pill::lyric::sings(&sung));
-        assert_eq!(geom(&media, &sung).w, crate::pill::media::fit_w());
-        // Lyrics switched off, or words without timings: compact again.
-        let mut off = playing(Some("[00:10.00]Paper lanterns on the line\n"));
-        off.settings.lyrics = false;
-        assert_eq!(geom(&media, &off).w, MEDIA_W);
-        assert_eq!(geom(&media, &playing(Some("plain words\nno stamps\n"))).w, MEDIA_W);
-        // Paused, a singing pill keeps its size (the title shows after a while).
-        let mut paused = sung;
-        paused.media.as_mut().unwrap().timeline = Timeline::new(12.0, 200.0, 0.0, false);
-        assert!(crate::pill::lyric::sings(&paused));
-    }
 
-    #[test]
-    fn music_with_readings_is_two_rows_tall_in_every_theme() {
-        use poni_core::romanize::Ruby;
-        use poni_core::settings::Theme;
-        let media = Mode::Activity(Activity::Media);
-        let mut st = playing(Some("[00:10.00]紙の舟よ\n[00:14.00]Paper boats\n"));
-        assert_eq!(geom(&media, &st).h, 32.0, "no readings: one row");
-        st.lyrics.ruby = vec![vec![Ruby { text: "紙の舟よ".into(), roman: "kami no fune yo".into() }], Vec::new()];
-        for theme in [Theme::Classic, Theme::Oyen, Theme::Glass, Theme::Pill] {
-            st.settings.theme = theme;
-            assert_eq!(geom(&media, &st).h, crate::pill::media::H_READS, "{theme:?}: the line over its reading");
-        }
-        // Readings switched off: one row again, as for a song without them.
-        st.settings.lyrics_pronunciation = false;
-        assert_eq!(geom(&media, &st).h, 32.0);
-    }
 
     #[test]
     fn stepped_aside_what_rests_waits_and_what_happens_still_shows() {
@@ -847,7 +725,7 @@ mod tests {
         idle.settings.idle_style = IdleStyle::Hidden;
         assert_eq!(geom(&Mode::Idle, &idle), geom(&Mode::Aside, &idle));
 
-        let mut song = playing(Some("[00:10.00]Paper lanterns on the line\n"));
+        let mut song = playing();
         song.aside = true;
         assert_eq!(collapsed_mode(&song), Mode::Aside);
         assert_eq!(resting_mode(&song), media);

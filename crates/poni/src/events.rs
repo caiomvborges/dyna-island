@@ -5,9 +5,6 @@
 
 use crate::gfx::Image;
 use crate::state::{MediaSession, PowerState, SysStats};
-use poni_core::lrc::Lyrics;
-use poni_core::oyenza::{Activity, Arrival, Bill, Saved};
-use poni_core::romanize::Ruby;
 use poni_core::timeline::Timeline;
 use std::sync::mpsc::Sender;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -57,59 +54,6 @@ impl EventSink {
     }
 }
 
-/// What Apple Music said about the user's token.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AppleMusicStatus {
-    /// The token works; Apple's synced lyrics come first from now on.
-    Accepted,
-    /// Apple refuses the token (expired, signed out, copied wrong).
-    Rejected,
-    /// Apple couldn't be reached to check; lookups will try again.
-    Unreachable,
-    /// The token works, but the account gets no lyrics (no subscription?).
-    NoAccess,
-}
-
-#[derive(Clone, Debug)]
-pub enum LyricsResult {
-    /// `ruby`: each line's pieces with their readings (empty = none needed).
-    /// `wants_ja_readings`: kanji went unread for want of the Japanese
-    /// readings add-on (`services::romanize::Pronounced`).
-    Found { lyrics: Lyrics, source: String, ruby: Vec<Vec<Ruby>>, wants_ja_readings: bool },
-    /// The song is marked instrumental (no words to show).
-    Instrumental,
-    NotFound,
-    Error(String),
-}
-
-/// What the Oyenza worker reports (`services::oyenza`).
-#[derive(Clone, Debug)]
-pub enum OyenzaEvent {
-    /// The sign-in saved on this PC was found at start (no notice).
-    Restored { account: String },
-    /// A sign-in code to show, the oyenza.app address that takes it, and how long it lasts.
-    Connecting { code: String, url: String, expires_in_s: u64 },
-    Connected { account: String },
-    /// Signing in stopped without a key: `expired`, `denied`, `offline` or `other`.
-    ConnectFailed(String),
-    ConnectCancelled,
-    /// Money that just arrived or went out by itself (oldest first).
-    Money { arrived: Vec<Arrival> },
-    /// The last 7 days of transactions, for the Oyenza page (while it's open).
-    Activity(Activity),
-    /// Asked again while the page is open: nothing changed.
-    ActivityChecked,
-    /// Bills due in the next 30 days, and the server's today (YYYY-MM-DD).
-    Bills { today: String, bills: Vec<Bill> },
-    NoteSaved(Vec<Saved>),
-    /// The note wasn't saved; the island puts `text` back and says why (`code`).
-    NoteFailed { text: String, code: String },
-    Undone,
-    UndoFailed(String),
-    /// Signed out: from the tray, or by the server (disconnected in oyenza.app).
-    Disconnected { by_server: bool },
-}
-
 pub enum AppEvent {
     /// The current media session changed (None = nothing playing / no session).
     Media(Option<MediaSession>),
@@ -117,9 +61,6 @@ pub enum AppEvent {
     MediaTimeline { track_key: String, timeline: Timeline },
     /// Album art finished decoding for a track.
     MediaArt { track_key: String, art: Option<Image> },
-    Lyrics { track_key: String, result: LyricsResult },
-    /// The outcome of checking or using the user's Apple Music token.
-    AppleMusic(AppleMusicStatus),
     /// Master volume changed (0..=1).
     Volume { level: f32, muted: bool },
     Power(PowerState),
@@ -137,10 +78,11 @@ pub enum AppEvent {
     /// to the thin band along the edge.
     TopWindows(Vec<[i32; 4]>),
     /// Files dropped on the island.
-    ShelfAdd(Vec<String>),
+    FilesDropped(Vec<String>),
     /// Files are being dragged over the island (true) or left (false).
     DragHover(bool),
-    ShelfThumb { path: String, image: Option<Image> },
+    /// An app icon the System page asked for (`services::imaging`).
+    Thumb { path: String, image: Option<Image> },
     Stats(SysStats),
     /// The System page's latest reading and the minute behind it
     /// (`services::sysmon`, each second while the page is open).
@@ -149,17 +91,11 @@ pub enum AppEvent {
     /// the one-time OK's outcome).
     FpsAccess(crate::state::FpsAccess),
     ClipboardText(String),
-    /// Phone drop's server: a phone opened the page, asked, sent, gave up.
-    Phone(poni_core::phonedrop::Event),
-    /// Paired phones: pairing done, the list changed, files from a phone.
-    Paired(poni_core::pairdrop::MeetEvent),
-    Oyenza(OyenzaEvent),
-    /// Where an add-on's files stand (`services::addons`).
-    Addon { id: &'static str, status: poni_core::addons::Status },
-    /// Where Windows says the PC is (`services::location`), for prayer times.
-    Located(crate::services::location::Located),
-    /// The adzan finished playing, or couldn't play on.
-    AdzanEnded,
+    /// What the Outlook agenda add-on just read (`services::agenda`).
+    Agenda(crate::services::agenda::AgendaRead),
+    /// A process the person asked about ended (`services::watch`), with its
+    /// exit code when Windows tells it.
+    ProcessExited { pid: u32, code: Option<u32> },
     /// Start with Windows is on (true) or off, read for the Settings page.
     Autostart(bool),
     /// Free-form log line from a service thread.

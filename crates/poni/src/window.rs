@@ -175,9 +175,6 @@ pub struct MonitorInfo {
 }
 
 impl MonitorInfo {
-    pub fn scale(&self) -> f32 {
-        self.dpi as f32 / 96.0
-    }
     /// Y where the island hangs from: below a top-docked taskbar, else the monitor top.
     pub fn top(&self) -> i32 {
         if self.work.top > self.rect.top && self.work.left <= self.rect.left && self.work.right >= self.rect.right {
@@ -185,9 +182,6 @@ impl MonitorInfo {
         } else {
             self.rect.top
         }
-    }
-    pub fn center_x(&self) -> i32 {
-        (self.rect.left + self.rect.right) / 2
     }
 }
 

@@ -1,4 +1,4 @@
-// Oyenza Studio's Glass theme: the island as liquid glass.
+// Dyna Island's Glass theme: the island as liquid glass.
 //
 // One triangle covers the island's canvas. Each pixel works out how far
 // inside the island's outline it is (the outline gfx::notch_segments draws:

@@ -545,15 +545,6 @@ pub(crate) fn fill_box(ui: &mut Ui, card: Option<(Rect, f32)>, r: Rect, radius: 
     }
 }
 
-/// [`fill_box`]'s outline: a `width` line just inside `r`'s edge.
-pub(crate) fn stroke_box(ui: &mut Ui, card: Option<(Rect, f32)>, r: Rect, radius: f32, color: Color, width: f32) {
-    let half = width / 2.0;
-    match card.map(|(c, cr)| pill_corners(c, cr, r, radius)).filter(|k| *k != [radius; 4]) {
-        Some(k) => ui.c.path(&rrect_segments(r.inset(half, half), k.map(|x| (x - half).max(0.0))), None, Some((color, width))),
-        None => ui.c.stroke_rrect(r, (radius - half).max(0.0), color, width),
-    }
-}
-
 /// A rounded rectangle with its own radius at each corner, as path segments.
 fn rrect_segments(r: Rect, [tl, tr, br, bl]: [f32; 4]) -> Vec<Seg> {
     let (x0, y0, x1, y1) = (r.x, r.y, r.right(), r.bottom());

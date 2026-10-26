@@ -3,15 +3,9 @@ name: ci
 on:
   push:
   workflow_dispatch:
-    inputs:
-      release_dry_run:
-        description: Also go through the release jobs as checks only (no tag, release, issue or website deploy)
-        type: boolean
-        default: false
 
-# A newer push cancels an older run of the same branch. A manual run (such as
-# a release dry run) has its own group, so it never cancels a push run, least
-# of all a tag's release run.
+# A newer push cancels an older run of the same branch. A manual run has its
+# own group, so it never cancels a push run.
 concurrency:
   group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
@@ -94,8 +88,7 @@ jobs:
   # The self-tests and smoke runs on three machines at once, from the
   # poni.exe built above. Each step is the same as when one machine ran them
   # all in a row; `group` says which machine runs it:
-  #   classic: the scripted self-test, the add-on on/off run, Japanese lyrics,
-  #            the Pill smoke run
+  #   classic: the scripted self-test, the Light self-test, the Pill smoke run
   #   glass:   the Glass self-tests, the Glass smoke run, the Pill self-test
   #   smoke:   the smoke run, the software renderer, the Inno Setup check
   # The Pill steps went to the two machines with the most room; smoke has
@@ -117,15 +110,12 @@ jobs:
           name: poni-exe
           path: target/release
 
-      # The runner is an admin, so Show over games' frame count runs on Oyen
+      # The runner is an admin, so Show over games' frame count runs on Light
       # Poni's own frames here: Windows' frame log must deliver them.
       - name: Self-test (scripted screenshots)
         if: matrix.group == 'classic'
         shell: pwsh
         env:
-          # Also download the Prayer times add-on's files from their release
-          # and check each one against the size and SHA-256 built in.
-          PONI_SELFTEST_ADDONS: download
           PONI_SELFTEST_FRAMES: required
         run: |
           # Park the cursor mid-screen so a hover can't change the scripted states.
@@ -161,107 +151,32 @@ jobs:
             exit 1
           }
 
-      # Add-ons end to end: start the app with Prayer times switched on in
-      # settings; its worker must download the files from their release and
-      # report ready. Then start it with Prayer times off: the files must go.
-      - name: Add-on switched on, then off (Prayer times)
-        if: matrix.group == 'classic'
-        shell: pwsh
-        run: |
-          $dir = New-Item -ItemType Directory -Force -Path addon-home
-          $env:PONI_HOME = $dir.FullName
-          $files = Join-Path $dir.FullName "cache\addons\sholat\addon-sholat-1"
-          $log = Join-Path $dir.FullName "cache\poni.log"
-          function Run-Poni($on, $pattern) {
-            "{`"addons`":{`"sholat`":$on}}" | Set-Content (Join-Path $env:PONI_HOME "settings.json")
-            $p = Start-Process -FilePath target\release\poni.exe -PassThru
-            $seen = $false
-            for ($i = 0; $i -lt 90 -and -not $seen; $i++) {
-              Start-Sleep -Seconds 1
-              $seen = [bool](Select-String -Path $log -Pattern $pattern -Quiet -ErrorAction SilentlyContinue)
-            }
-            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 1
-            return $seen
-          }
-          $ready = Run-Poni "true" "add-ons: sholat: ready"
-          "---- files"
-          Get-ChildItem $files -ErrorAction SilentlyContinue | ForEach-Object { "  $($_.Name)  $($_.Length) bytes" }
-          $have = @(Get-ChildItem $files -ErrorAction SilentlyContinue).Count
-          $gone = Run-Poni "false" "add-ons: sholat: switched off, files deleted"
-          $left = Test-Path (Join-Path $dir.FullName "cache\addons\sholat")
-          "---- poni.log (add-ons)"
-          Select-String -Path $log -Pattern 'add-ons' -ErrorAction SilentlyContinue | ForEach-Object { $_.Line }
-          "ready: $ready, files: $have, deleted when off: $gone, folder left: $left"
-          if (-not $ready -or $have -ne 3 -or -not $gone -or $left) { exit 1 }
-
-      # The Oyen theme (cream look, embedded Outfit font) with the sample song in
-      # Japanese: its pronunciation line comes from Windows' own reading
-      # analyzer, which Wine doesn't have, so this is where it gets checked.
-      # Every line must read (kanji lines too), from a worker thread like the
-      # real lyrics lookup.
-      - name: Self-test, Oyen theme, Japanese lyrics
+      # The Light theme (cream look, embedded Outfit font).
+      - name: Self-test, Light theme
         if: matrix.group == 'classic'
         shell: pwsh
         env:
-          PONI_SELFTEST_THEME: oyen
-          PONI_SELFTEST_LYRICS: ja
-          PONI_SELFTEST_ANALYZER: required
+          PONI_SELFTEST_THEME: light
         run: |
           Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -Namespace PoniCiOyen -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
+          Add-Type -Namespace PoniCiLight -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          [PoniCiOyen.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
+          [PoniCiLight.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
 
-          New-Item -ItemType Directory -Force -Path selftest-oyen-ja | Out-Null
-          $p = Start-Process -FilePath target\release\poni.exe -ArgumentList "--selftest","selftest-oyen-ja" -PassThru
+          New-Item -ItemType Directory -Force -Path selftest-light | Out-Null
+          $p = Start-Process -FilePath target\release\poni.exe -ArgumentList "--selftest","selftest-light" -PassThru
           $null = $p.Handle
           if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; $code = -1 } else { $code = $p.ExitCode }
-          "oyen + japanese self-test exit code: $code"
-          if (Test-Path selftest-oyen-ja\report.json) {
-            $r = Get-Content selftest-oyen-ja\report.json -Raw | ConvertFrom-Json
+          "light self-test exit code: $code"
+          if (Test-Path selftest-light\report.json) {
+            $r = Get-Content selftest-light\report.json -Raw | ConvertFrom-Json
             "renderer: $($r.renderer); states passed: $($r.states_passed)/$($r.states_total); failed: $($r.failed_checks -join ', ')"
             if ($r.slow_frames) { "::warning title=Slow frames on CI's software GPU (not counted)::$($r.slow_frames -join '; ')" }
           }
-          "---- pronunciation (poni.log)"
-          Select-String -Path selftest-oyen-ja\home\cache\poni.log -Pattern 'selftest: \[ja\]|fonts:|reading analyzer' -ErrorAction SilentlyContinue | ForEach-Object { $_.Line }
+          "---- fonts (poni.log)"
+          Select-String -Path selftest-light\home\cache\poni.log -Pattern 'fonts:' -ErrorAction SilentlyContinue | ForEach-Object { $_.Line }
           if ($code -ne 0) {
-            Get-Content selftest-oyen-ja\home\cache\poni.log -Tail 80 -ErrorAction SilentlyContinue
-            exit 1
-          }
-
-      # The same song the way a PC without Windows' Japanese reading data
-      # reads it (most Windows 11 PCs outside Japan): with Oyenza Studio's own
-      # dictionary from the Japanese readings add-on (the repo's copy, put
-      # where the add-on keeps it). Every line must read here too.
-      - name: Self-test, Japanese lyrics with Oyenza Studio's own dictionary
-        if: matrix.group == 'classic'
-        shell: pwsh
-        env:
-          PONI_SELFTEST_THEME: oyen
-          PONI_SELFTEST_LYRICS: ja
-          PONI_SELFTEST_ANALYZER: "off"
-          PONI_SELFTEST_JA_DICT: crates\poni-core\data\ja-readings.dic.zst
-        run: |
-          Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -Namespace PoniCiOwn -Name User32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
-          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          [PoniCiOwn.User32]::SetCursorPos([int]($b.Width / 2), [int]($b.Height / 2)) | Out-Null
-
-          New-Item -ItemType Directory -Force -Path selftest-ja-own | Out-Null
-          $p = Start-Process -FilePath target\release\poni.exe -ArgumentList "--selftest","selftest-ja-own" -PassThru
-          $null = $p.Handle
-          if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; $code = -1 } else { $code = $p.ExitCode }
-          "own-dictionary self-test exit code: $code"
-          if (Test-Path selftest-ja-own\report.json) {
-            $r = Get-Content selftest-ja-own\report.json -Raw | ConvertFrom-Json
-            "renderer: $($r.renderer); states passed: $($r.states_passed)/$($r.states_total); failed: $($r.failed_checks -join ', ')"
-            if ($r.slow_frames) { "::warning title=Slow frames on CI's software GPU (not counted)::$($r.slow_frames -join '; ')" }
-          }
-          "---- pronunciation (poni.log)"
-          Select-String -Path selftest-ja-own\home\cache\poni.log -Pattern 'selftest: \[ja\]|reading' -ErrorAction SilentlyContinue | ForEach-Object { $_.Line }
-          if ($code -ne 0) {
-            Get-Content selftest-ja-own\home\cache\poni.log -Tail 80 -ErrorAction SilentlyContinue
+            Get-Content selftest-light\home\cache\poni.log -Tail 80 -ErrorAction SilentlyContinue
             exit 1
           }
 
@@ -399,7 +314,7 @@ jobs:
           if (-not $iscc) { Write-Error "ISCC.exe not found after installing Inno Setup"; exit 1 }
           & $iscc "/DAppVersion=$env:PONI_VERSION" installer\poni.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-Item "dist\Oyenza-Studio-Setup-$env:PONI_VERSION.exe" | Format-List Name, Length
+          Get-Item "dist\Dyna-Island-Setup-$env:PONI_VERSION.exe" | Format-List Name, Length
 
       - name: Upload screenshots and logs
         if: always()
@@ -408,8 +323,7 @@ jobs:
           name: poni-screens-${{ matrix.group }}
           path: |
             selftest-out
-            selftest-oyen-ja
-            selftest-ja-own
+            selftest-light
             selftest-glass-light
             selftest-glass-dark
             selftest-glass-flip
@@ -426,7 +340,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: poni-setup-inno
-          path: dist/Oyenza-Studio-Setup-${{ env.PONI_VERSION }}.exe
+          path: dist/Dyna-Island-Setup-${{ env.PONI_VERSION }}.exe
           if-no-files-found: error
 
   # The three machines' screenshots and logs as one poni-screens download,
@@ -444,7 +358,7 @@ jobs:
           delete-merged: true
 
   installer:
-    name: NSIS installer and portable zip (what releases ship)
+    name: NSIS installer and portable zip
     needs: windows
     # Pinned: 24.04's nsis 3.09 has the amd64-unicode stubs poni.nsi needs.
     runs-on: ubuntu-24.04
@@ -460,131 +374,16 @@ jobs:
           sudo apt-get install -y -qq nsis zip > /dev/null
           makensis -V2 -DEXE="$PWD/dist/poni.exe" -DOUTDIR="$PWD/dist" installer/poni.nsi
           # Portable build inside its own folder, as tools/package.sh makes it.
-          ( cd dist && mkdir Poni && cp poni.exe ../THIRD-PARTY-NOTICES.txt Poni/ && zip -qr "Oyenza-Studio-$PONI_VERSION-portable.zip" Poni && rm -rf Poni )
+          ( cd dist && mkdir Poni && cp poni.exe ../THIRD-PARTY-NOTICES.txt Poni/ && zip -qr "Dyna-Island-$PONI_VERSION-portable.zip" Poni && rm -rf Poni )
           ls -la dist
       # The download against tools/weight-budget.json (the Windows job's smoke
       # run weighs memory, CPU and wake-ups).
       - name: Weight check, download size
-        run: tools/ci-weight-download.sh "dist/Oyenza-Studio-Setup-$PONI_VERSION.exe"
+        run: tools/ci-weight-download.sh "dist/Dyna-Island-Setup-$PONI_VERSION.exe"
       - uses: actions/upload-artifact@v4
         with:
-          name: oyenza-studio-setup
+          name: dyna-island-setup
           path: |
-            dist/Oyenza-Studio-Setup-${{ env.PONI_VERSION }}.exe
-            dist/Oyenza-Studio-${{ env.PONI_VERSION }}-portable.zip
+            dist/Dyna-Island-Setup-${{ env.PONI_VERSION }}.exe
+            dist/Dyna-Island-${{ env.PONI_VERSION }}-portable.zip
           if-no-files-found: error
-
-  install-test:
-    name: Install over 0.1.1, check and uninstall (Windows)
-    needs: installer
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: oyenza-studio-setup
-          path: dist
-      - name: Fetch the release to upgrade from
-        shell: pwsh
-        # 0.1.1 is the installer people have today; the check upgrades from it.
-        run: Invoke-WebRequest -Uri "https://github.com/lucacadalora/oyenza-studio/releases/download/v0.1.1/Poni-Setup-0.1.1.exe" -OutFile previous-setup.exe
-      - name: Install, check, uninstall
-        shell: pwsh
-        run: ./tools/ci-installer.ps1 -Setup "dist\Oyenza-Studio-Setup-$env:PONI_VERSION.exe" -Version $env:PONI_VERSION -Previous previous-setup.exe -Out installer-out
-      - name: Upload screenshots and results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: installer-check
-          path: installer-out
-          if-no-files-found: warn
-
-  # A tag push publishes. A manual run with release_dry_run goes through the
-  # same jobs and checks and publishes nothing: no tag, release or issue, and
-  # no website deploy. It says what a tag would publish instead.
-  release:
-    name: GitHub Release (tags v*)
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_dry_run
-    needs: [core, windows, unit-tests, selftest, installer, install-test]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: The tag matches PONI_VERSION
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: test "$GITHUB_REF_NAME" = "v$PONI_VERSION"
-      - uses: actions/download-artifact@v4
-        with:
-          name: oyenza-studio-setup
-          path: dist
-      # Oyen-Poni-Setup.exe is the fixed name before the rename (0.1.2 to the last 0.1.x). Links to it are
-      # out there (oyenza.com, shared links, old README copies), so every release keeps carrying it.
-      - name: Copy the installer to the fixed names the download links use
-        run: |
-          cp "dist/Oyenza-Studio-Setup-$PONI_VERSION.exe" dist/Oyenza-Studio-Setup.exe
-          cp "dist/Oyenza-Studio-Setup-$PONI_VERSION.exe" dist/Oyen-Poni-Setup.exe
-      - name: Publish as the latest release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
-        with:
-          name: Oyenza Studio ${{ env.PONI_VERSION }}
-          body_path: docs/release-notes/${{ github.ref_name }}.md
-          prerelease: false
-          make_latest: "true"
-          files: |
-            dist/Oyenza-Studio-Setup-${{ env.PONI_VERSION }}.exe
-            dist/Oyenza-Studio-Setup.exe
-            dist/Oyen-Poni-Setup.exe
-            dist/Oyenza-Studio-${{ env.PONI_VERSION }}-portable.zip
-          fail_on_unmatched_files: true
-      - name: What a tag would publish (dry run, nothing is published)
-        if: github.event_name != 'push'
-        run: |
-          notes="docs/release-notes/v$PONI_VERSION.md"
-          if [ ! -s "$notes" ]; then
-            echo "::error file=$notes::Missing: a v$PONI_VERSION tag would publish without release notes."
-            exit 1
-          fi
-          {
-            echo "### Release dry run: nothing was published"
-            echo
-            echo "A \`v$PONI_VERSION\` tag would publish **Oyenza Studio $PONI_VERSION** as the latest release, with \`$notes\` as its text and these files:"
-            echo
-            echo '```'
-            (cd dist && sha256sum "Oyenza-Studio-Setup-$PONI_VERSION.exe" Oyenza-Studio-Setup.exe Oyen-Poni-Setup.exe "Oyenza-Studio-$PONI_VERSION-portable.zip" && ls -l "Oyenza-Studio-Setup-$PONI_VERSION.exe" Oyenza-Studio-Setup.exe Oyen-Poni-Setup.exe "Oyenza-Studio-$PONI_VERSION-portable.zip")
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-  # Every release updates the website too (AGENTS.md). If the page on main names
-  # this version, start the Website workflow, which has held it until now;
-  # otherwise open a "Landing page not updated" issue. A dry run only says which.
-  site:
-    name: Website shows the release (tags v*)
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_dry_run
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
-      actions: write
-    steps:
-      # main, not the tag: the website is published from main.
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-      - name: Put the page live, or open an issue
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: tools/ci-site-check.sh release "$GITHUB_REF_NAME"
-      - name: What a tag would do to the website (dry run, nothing changes)
-        if: github.event_name != 'push'
-        run: |
-          page=$(tools/ci-site-check.sh version)
-          if [ "$page" = "$PONI_VERSION" ]; then
-            msg="The page on main names $page, so a v$PONI_VERSION tag would start the Website workflow and put it live."
-          else
-            msg="The page on main names ${page:-no version}, so a v$PONI_VERSION tag would open the issue \"Landing page not updated for v$PONI_VERSION\"."
-          fi
-          echo "$msg" | tee -a "$GITHUB_STEP_SUMMARY"

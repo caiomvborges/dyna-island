@@ -5,14 +5,12 @@
 //! path can block for many seconds while the network times out. Every call
 //! gets a short-lived "poni-shell" STA thread instead.
 //!
-//! Targets arrive from drag-and-drop (shelf paths) and from pages (URLs), so
+//! Targets arrive from pages (file-system paths and URLs), so
 //! only two kinds are handed to the shell: existing absolute local or UNC
 //! file-system paths, and `http`/`https` URLs. Anything else (`ms-settings:`,
 //! `javascript:`, `shell:`, relative names that would be searched on `PATH`)
-//! is logged and refused. Two fixed exceptions: Settings > Apps > Startup
-//! ([`open_startup_settings`]), a constant URI, and Oyenza Studio Recorder's
-//! own action links ([`open_recorder_link`]): its fixed scheme and one
-//! percent-encoded value, as `poni_core::recorder` builds them.
+//! is logged and refused. One fixed exception: Settings > Apps > Startup
+//! ([`open_startup_settings`]), a constant URI.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::core::{w, HSTRING};
@@ -54,23 +52,6 @@ pub fn open(target: &str) {
     });
 }
 
-/// Open one of Oyenza Studio Recorder's action links (asynchronously). Only
-/// the shape `poni_core::recorder` builds reaches the shell.
-pub fn open_recorder_link(link: &str) {
-    if !poni_core::recorder::is_action_link(link) {
-        crate::pwarn!("recorder link refused: {}", for_log(link));
-        return;
-    }
-    let link = link.to_string();
-    run("recorder", move || {
-        let t = HSTRING::from(link.as_str());
-        let r = unsafe { ShellExecuteW(None, w!("open"), &t, None, None, SW_SHOWNORMAL) };
-        if (r.0 as isize) <= 32 {
-            crate::pwarn!("recorder link failed ({})", r.0 as isize);
-        }
-    });
-}
-
 /// Open Settings > Apps > Startup (asynchronously). The Store build sends
 /// people there when they turned Poni's startup task off in Windows, the only
 /// place it can be turned back on.
@@ -79,34 +60,6 @@ pub fn open_startup_settings() {
         let r = unsafe { ShellExecuteW(None, w!("open"), w!("ms-settings:startupapps"), None, None, SW_SHOWNORMAL) };
         if (r.0 as isize) <= 32 {
             crate::pwarn!("open failed ({}): ms-settings:startupapps", r.0 as isize);
-        }
-    });
-}
-
-/// Show a file selected in Explorer (asynchronously).
-pub fn reveal(path: &str) {
-    match classify(path) {
-        Ok(Target::Path) => {}
-        Ok(Target::Url) => {
-            crate::pwarn!("reveal refused (not a file-system path): {}", for_log(path));
-            return;
-        }
-        Err(why) => {
-            crate::pwarn!("reveal refused ({why}): {}", for_log(path));
-            return;
-        }
-    }
-    let path = path.to_string();
-    run("reveal", move || {
-        if std::fs::metadata(&path).is_err() {
-            crate::pwarn!("reveal refused (not found): {}", for_log(&path));
-            return;
-        }
-        // `classify` rejected quotes, so the path cannot end the argument early.
-        let args = HSTRING::from(format!("/select,\"{path}\""));
-        let r = unsafe { ShellExecuteW(None, w!("open"), w!("explorer.exe"), &args, None, SW_SHOWNORMAL) };
-        if (r.0 as isize) <= 32 {
-            crate::pwarn!("reveal failed ({}): {}", r.0 as isize, for_log(&path));
         }
     });
 }

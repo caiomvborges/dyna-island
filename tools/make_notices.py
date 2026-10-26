@@ -10,13 +10,12 @@ for x86_64-pc-windows-msvc, as `cargo tree` resolves them for that target:
 `cargo metadata` would also count features that only other platforms turn
 on; build tools and proc macros leave nothing in the exe) and carries each
 one's MIT license text with its copyright line, identical texts once. Every
-crate in that list offers MIT (some also Apache-2.0 or the Unlicense), so Oyen
-Poni uses each under MIT; a crate that doesn't offer MIT stops the script,
+crate in that list offers MIT (some also Apache-2.0 or the Unlicense), so Dyna
+Island uses each under MIT; a crate that doesn't offer MIT stops the script,
 unless it is in BY_HAND and its notice is written by hand above. A crate that
 ships no license file gets it from tools/notices/<crate>.txt.
 
-Everything above the part's heading line is kept as it is (the mecab-ipadic
-and Unicode notices are written by hand). Needs cargo and the crate sources
+Everything above the part's heading line is kept as it is. Needs cargo and the crate sources
 (`cargo fetch --locked`). Python 3 standard library only.
 """
 
@@ -33,7 +32,7 @@ RULE = "-" * 78
 HEADING = "Rust crates built into poni.exe"
 # Crates without an MIT option whose notice is written by hand above the
 # heading (the script checks the notice is there).
-BY_HAND = {"subtle"}
+BY_HAND: set[str] = set()
 # Where a crate keeps its MIT text, most specific first.
 MIT_FILES = ["license-mit", "license-mit.md", "license-mit.txt", "license", "license.md", "license.txt"]
 
@@ -113,7 +112,7 @@ def section(crates, head):
         HEADING,
         "",
         "Written by tools/make_notices.py from Cargo.lock. Each of these crates offers the",
-        "MIT license (some also Apache-2.0 or the Unlicense), and Oyenza Studio uses each one",
+        "MIT license (some also Apache-2.0 or the Unlicense), and Dyna Island uses each one",
         "under MIT, except those whose notice is written out above. Crates with the same",
         "license text share one copy.",
         "",

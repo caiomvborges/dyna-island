@@ -16,7 +16,11 @@
 //! along a smooth curve through all five (a cardinal spline in time), so it
 //! slows as it gathers and speeds up as it falls, the way water does. On top
 //! of that the crest leans forward as it builds, a swell keeps running along
-//! the water and the foam fizzes. Moving costs
+//! the water and the foam fizzes and runs forward along the crest. No two
+//! breaks are alike: each one is a little taller or lower and leans more or
+//! less (drawn from its number, so the same moment always looks the same).
+//! The paler layers follow the deep one a moment late, as the water inside a
+//! wave does, and the spray flies off on its own once thrown. Moving costs
 //! frames, so it only moves where the caller says (`moving`): in the music
 //! pill while something plays, and elsewhere unless battery saver is on;
 //! ambient frames already stop while the PC is locked or the display is off.
@@ -100,11 +104,22 @@ const LEAN: [f32; 5] = [0.0, 2.5, 4.0, 5.0, 2.0];
 const SWELL_H: f32 = 1.1;
 const SWELL_LEN: f64 = 48.0;
 const SWELL_T: f64 = 1.4;
-/// The spray thrown as the lip comes down: when it starts and how long it flies.
+/// The spray thrown as the lip comes down: when it starts and how long it
+/// flies at most, how many drops and how hard gravity pulls (box units/s²).
 const SPRAY_AT: f64 = 1.85;
 const SPRAY_LIFE: f64 = 1.0;
-/// Each drop's push (right, up) in box units.
-const DROPS: [(f32, f32); 5] = [(6.0, 16.0), (12.0, 12.0), (2.0, 20.0), (16.0, 8.0), (9.0, 18.0)];
+const DROPS: usize = 8;
+const GRAVITY: f32 = 60.0;
+/// How much a break's height and lean may differ from the drawn poses.
+const HEIGHT_RANGE: (f32, f32) = (0.84, 1.04);
+const LEAN_RANGE: (f32, f32) = (0.6, 1.4);
+/// How far behind the deep body the paler layers move (seconds).
+const MID_LAG: f64 = 0.07;
+const PALE_LAG: f64 = 0.14;
+/// How many foam bubbles ride the crest, and how fast they run along it
+/// (crests a second).
+const CREST_BUBBLES: usize = 13;
+const FOAM_RUN: f64 = 0.7;
 
 /// The bands: the body shrunk towards its left foot by these.
 const BAND_MID: f32 = 0.78;
@@ -166,6 +181,48 @@ fn pose_at(t: f64) -> (Pose, f32, f32) {
     (p, through(&sp, |k| FOAMY[k]).max(0.2), through(&sp, |k| LEAN[k]))
 }
 
+/// A number in 0..1 for the `n`-th break, the same every time (SplitMix64).
+fn rnd(n: i64, salt: u64) -> f32 {
+    let mut z = (n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(salt.wrapping_mul(0xBF58_476D_1CE4_E5B9));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 40) as f32 / (1u64 << 24) as f32
+}
+
+fn in_range((lo, hi): (f32, f32), u: f32) -> f32 {
+    lo + (hi - lo) * u
+}
+
+/// Which break `t` (seconds, any) falls in, and how far into it. Worked out
+/// together: `div_euclid` and `rem_euclid` on their own can disagree by a
+/// whole break right at its edge.
+fn break_of(t: f64) -> (i64, f64) {
+    let n = (t / CYCLE).floor();
+    (n as i64, (t - n * CYCLE).clamp(0.0, CYCLE * (1.0 - 1e-12)))
+}
+
+/// The moving wave at `t` (seconds, any): its body and its foam. Each break
+/// gets its own height and lean, blended into the next over the break so
+/// there is never a jump.
+fn wave_at(t: f64) -> (Pose, f32) {
+    let (n, phase) = break_of(t);
+    let blend = {
+        let x = (phase / CYCLE) as f32;
+        x * x * (3.0 - 2.0 * x)
+    };
+    let mix = |salt: u64, range: (f32, f32)| {
+        let (a, b) = (in_range(range, rnd(n, salt)), in_range(range, rnd(n + 1, salt)));
+        a + (b - a) * blend
+    };
+    let (height, lean_k) = (mix(1, HEIGHT_RANGE), mix(2, LEAN_RANGE));
+    let (mut p, amount, lean) = pose_at(phase);
+    for q in p.iter_mut() {
+        q.1 = (BOX_H - (BOX_H - q.1) * height).clamp(0.0, BOX_H);
+    }
+    (swell(&p, lean * lean_k, t), amount)
+}
+
 /// The pose with the crest leaning `lean` forward and the swell at `t`
 /// running along it; the feet stay put.
 fn swell(p: &Pose, lean: f32, t: f64) -> Pose {
@@ -191,37 +248,55 @@ fn bezier(c: [(f32, f32); 4], t: f32) -> (f32, f32) {
 }
 
 /// Foam along the body: (centre, radius) in box units. Small on the back of
-/// the top, full along the top, thinning into claws down the lip. With
-/// `fizz` (the time, while it moves) each bubble swells and shrinks a little,
-/// out of step with the others.
-fn foam(p: &Pose, amount: f32, fizz: Option<f64>) -> Vec<((f32, f32), f32)> {
-    let mut out = Vec::with_capacity(17);
-    for (i, t0, t1, n, r0, r1) in [(1, 0.5, 1.0, 5, 1.6, 2.4), (2, 0.0, 1.0, 8, 2.4, 2.6), (3, 0.0, 0.75, 4, 2.4, 1.0)] {
-        let c = curve(p, i);
-        for k in 0..n {
-            let u = k as f32 / (n - 1) as f32;
-            let jiggle = fizz.map_or(1.0, |t| 1.0 + 0.12 * (t * 7.0 + (i * 8 + k) as f64 * 1.9).sin() as f32);
-            out.push((bezier(c, t0 + (t1 - t0) * u), (r0 + (r1 - r0) * u) * amount * jiggle));
-        }
+/// the top, full along the top, thinning into claws down the lip. While it
+/// moves (`moving`: the time) the crest's bubbles run forward along it, a
+/// new one swelling in at the back as each reaches the lip, and every bubble
+/// fizzes, out of step with the others.
+fn foam(p: &Pose, amount: f32, moving: Option<f64>) -> Vec<((f32, f32), f32)> {
+    let mut out = Vec::with_capacity(CREST_BUBBLES + 4);
+    let fizz = |t: f64, k: usize| 1.0 + 0.12 * (t * 7.0 + k as f64 * 1.9).sin() as f32;
+    // The crest: the back half of the top curve, then the curve over to the
+    // lip's tip, as one track (its first part is the shorter).
+    let (back, over) = (curve(p, 1), curve(p, 2));
+    let flow = moving.map_or(0.0, |t| (t * FOAM_RUN * CREST_BUBBLES as f64).rem_euclid(1.0) as f32);
+    for k in 0..CREST_BUBBLES {
+        let u = (k as f32 + flow) / CREST_BUBBLES as f32;
+        let at = if u < 0.38 { bezier(back, 0.5 + 0.5 * u / 0.38) } else { bezier(over, (u - 0.38) / 0.62) };
+        let r = if u < 0.38 { 1.6 + 0.8 * u / 0.38 } else { 2.4 + 0.2 * (u - 0.38) / 0.62 };
+        // The newest bubble swells in from nothing at the back.
+        let grow = (u * CREST_BUBBLES as f32).min(1.0);
+        out.push((at, r * amount * grow * moving.map_or(1.0, |t| fizz(t, k))));
+    }
+    // The claws down the lip.
+    let lip = curve(p, 3);
+    for k in 0..4 {
+        let u = k as f32 / 3.0;
+        out.push((bezier(lip, 0.75 * u), (2.4 - 1.4 * u) * amount * moving.map_or(1.0, |t| fizz(t, 20 + k))));
     }
     out
 }
 
-/// The spray at `t` into a break, thrown from the lip's tip: (centre,
-/// radius, opacity) in box units.
-fn spray(p: &Pose, t: f64) -> Vec<((f32, f32), f32, f32)> {
-    let t = t.rem_euclid(CYCLE);
-    if !(SPRAY_AT..=SPRAY_AT + SPRAY_LIFE).contains(&t) {
+/// The spray at `t` (seconds, any): drops thrown from where the lip's tip
+/// was as it came down, each with its own push, size and life, then left to
+/// fall on their own. (centre, radius, opacity) in box units.
+fn spray(t: f64) -> Vec<((f32, f32), f32, f32)> {
+    let n = break_of(t).0;
+    let start = n as f64 * CYCLE + SPRAY_AT;
+    let age = (t - start) as f32;
+    if !(0.0..=SPRAY_LIFE as f32).contains(&age) {
         return Vec::new();
     }
-    let tip = p[9];
-    let age = ((t - SPRAY_AT) / SPRAY_LIFE) as f32;
-    DROPS
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &(vx, vy))| {
-            let q = age * (0.8 + 0.1 * i as f32);
-            (q <= 1.0).then(|| ((tip.0 + vx * q - 4.0, tip.1 - vy * q + 22.0 * q * q), 2.0 * (1.0 - 0.5 * q), 1.0 - q))
+    let tip = wave_at(start).0[9];
+    (0..DROPS as u64)
+        .filter_map(|i| {
+            let r = |salt: u64| rnd(n, 10 + i * 5 + salt);
+            let (vx, vy) = (in_range((-4.0, 22.0), r(0)), in_range((14.0, 34.0), r(1)));
+            let life = SPRAY_LIFE as f32 * in_range((0.55, 1.0), r(2));
+            let q = age / life;
+            (q <= 1.0).then(|| {
+                let at = (tip.0 + vx * age, tip.1 - vy * age + 0.5 * GRAVITY * age * age);
+                (at, in_range((1.1, 2.3), r(3)) * (1.0 - 0.5 * q), 1.0 - q * q)
+            })
         })
         .collect()
 }
@@ -260,12 +335,10 @@ fn polygon(pts: &[(f32, f32)], map: &impl Fn(f32, f32) -> (f32, f32)) -> Vec<Seg
 pub fn draw(c: &mut Canvas, cx: f32, base_y: f32, w: f32, clip: Rect, now: f64, moving: bool) {
     let k = w / BOX_W;
     let map = |x: f32, y: f32| (cx + (x - BOX_W / 2.0) * k, base_y + (y - BOX_H) * k);
-    let (p, amount) = if moving {
-        let (p, amount, lean) = pose_at(now);
-        (swell(&p, lean, now), amount)
-    } else {
-        (CURLED, 1.0)
-    };
+    let (p, amount) = if moving { wave_at(now) } else { (CURLED, 1.0) };
+    // The paler layers move a moment behind the deep body.
+    let layer = |lag: f64| if moving { wave_at(now - lag).0 } else { CURLED };
+    let (p_mid, p_pale) = (layer(MID_LAG), layer(PALE_LAG));
     let rim = (0.7 * k).max(0.5);
     c.clip(clip);
     c.unthemed(|c| {
@@ -274,8 +347,8 @@ pub fn draw(c: &mut Canvas, cx: f32, base_y: f32, w: f32, clip: Rect, now: f64, 
             c.path(&polygon(&SNOW, &map), Some(FOAM), None);
         }
         c.path(&body(&p, 1.0, &map), Some(DEEP), None);
-        c.path(&body(&p, BAND_MID, &map), Some(MID), None);
-        c.path(&body(&p, BAND_PALE, &map), Some(PALE), None);
+        c.path(&body(&p_mid, BAND_MID, &map), Some(MID), None);
+        c.path(&body(&p_pale, BAND_PALE, &map), Some(PALE), None);
         // Foam: every bubble's blue rim first, then the white over them,
         // so only the outer edge of the crest shows a line.
         let dots = foam(&p, amount, moving.then_some(now));
@@ -288,7 +361,7 @@ pub fn draw(c: &mut Canvas, cx: f32, base_y: f32, w: f32, clip: Rect, now: f64, 
             c.fill_circle(Point::new(px, py), r * k, FOAM);
         }
         if moving {
-            for ((x, y), r, a) in spray(&p, now) {
+            for ((x, y), r, a) in spray(now) {
                 let (px, py) = map(x, y);
                 c.with_alpha(a, |c| {
                     c.fill_circle(Point::new(px, py), r * k + rim, DEEP);
@@ -342,8 +415,26 @@ mod tests {
 
     #[test]
     fn spray_flies_only_as_the_lip_comes_down() {
-        assert!(spray(&CURLED, 1.0).is_empty());
-        assert!(!spray(&PLUNGING, SPRAY_AT + 0.2).is_empty());
-        assert!(spray(&PLUNGING, SPRAY_AT + SPRAY_LIFE + 0.1).is_empty());
+        assert!(spray(1.0).is_empty());
+        assert!(!spray(SPRAY_AT + 0.2).is_empty());
+        assert!(spray(SPRAY_AT + SPRAY_LIFE + 0.1).is_empty());
+        // Once thrown, a drop doesn't follow the lip: it falls.
+        let (a, b) = (spray(SPRAY_AT + 0.3), spray(SPRAY_AT + 0.5));
+        assert!(b.iter().zip(&a).any(|(b, a)| b.0 .1 > a.0 .1));
+    }
+
+    #[test]
+    fn no_two_breaks_alike_and_no_jumps_between_them() {
+        let top = |t: f64| wave_at(t).0[6].1;
+        let peaks: Vec<f32> = (0..6).map(|n| top(n as f64 * CYCLE + AT[2])).collect();
+        assert!(peaks.windows(2).any(|w| (w[0] - w[1]).abs() > 0.3), "{peaks:?}");
+        for n in 1..6 {
+            let at = n as f64 * CYCLE;
+            assert!((top(at - 1e-4) - top(at)).abs() < 0.2, "jump at break {n}");
+        }
+        for n in 0..50 {
+            let v = rnd(n, 1);
+            assert!((0.0..1.0).contains(&v));
+        }
     }
 }

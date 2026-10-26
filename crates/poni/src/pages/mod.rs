@@ -207,7 +207,12 @@ pub fn next_wake(page: PageKind, st: &AppState) -> Option<f64> {
         PageKind::Script => script::next_wake(st),
         _ => None,
     };
-    wake
+    // The Light theme's wave in the header rolls now and then (not on battery saver).
+    let roll = (crate::wave::on(st.settings.theme) && !st.power.saver).then(|| crate::wave::next_roll(st.now));
+    match (wake, roll) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
 }
 
 /// A page switch in progress: the page we came from, 0..1 progress, and the
@@ -468,7 +473,11 @@ pub(crate) fn draw_header(ui: &mut Ui, st: &mut AppState, r: Rect, page: PageKin
     let wave_cx = pin_r.x - WAVE_GAP - WAVE_W / 2.0;
     if crate::wave::on(st.settings.theme) && wave_cx - WAVE_W / 2.0 > tabs_end + 12.0 {
         let base = cy + crate::wave::height(WAVE_W) / 2.0;
-        crate::wave::draw(ui.c, wave_cx, base, WAVE_W, r, st.now, false);
+        let roll = if st.power.saver { 0.0 } else { crate::wave::roll(st.now) };
+        if !st.power.saver && crate::wave::rolling(st.now) {
+            ui.request_live();
+        }
+        crate::wave::draw(ui.c, wave_cx, base, WAVE_W, r, st.now, roll);
     }
     if pin_r.x > tabs_end + 8.0 {
         let pinned = st.pinned;

@@ -6,9 +6,16 @@
 //! sits on a line near the island's bottom: a Prussian-blue body that rises
 //! on the left and curls over to the right, two paler bands along it, a
 //! white crest with claws hanging into the hollow, spray, and Fuji far off
-//! in the hollow. It stands still, except in the music pill while something
-//! plays, where it sways (that pill already redraws every frame for the
-//! equalizer it replaces).
+//! in the hollow.
+//!
+//! It moves like water: a ripple runs along it, the crest leans over and
+//! back, the swell lifts it and the spray flies up off the curl. In the music
+//! pill it moves for as long as something plays (that pill already redraws
+//! every frame for the equalizer it replaces). Elsewhere it rolls for
+//! [`ROLL_LEN`] seconds every [`ROLL_EVERY`] and stands still in between, so
+//! the island sleeps most of the time; the callers skip the rolls on battery
+//! saver, and ambient frames already stop while the PC is locked or the
+//! display is off.
 
 use crate::gfx::Canvas;
 use poni_core::geom::{Color, Point, Rect};
@@ -34,9 +41,41 @@ const SNOW: &str = "M83.4 52.1L86 49L88.8 52.4L87.2 51.6L86 52.9L84.8 51.5Z";
 /// Spray in the hollow under the curl: centre and radius in box units.
 const SPRAY: [(f32, f32, f32); 4] = [(86.0, 34.0, 1.8), (92.0, 38.0, 1.4), (81.0, 40.0, 1.2), (95.5, 31.0, 1.3)];
 
-/// How long one sway takes while music plays, and one rise and fall.
+/// How long one sway of the crest takes, one rise and fall of the swell,
+/// and one ripple along the wave (its length in box units).
 const SWAY: f64 = 1.6;
 const SWELL: f64 = 0.8;
+const RIPPLE: f64 = 1.3;
+const RIPPLE_LEN: f64 = 45.0;
+/// How long a puff of spray takes to rise and fade.
+const SPRAY_LIFE: f64 = 1.1;
+
+/// Away from the music, the wave rolls this long (seconds)...
+pub const ROLL_LEN: f64 = 3.0;
+/// ...once in this many: a little life now and then, while costing frames
+/// only three seconds in eight.
+pub const ROLL_EVERY: f64 = 8.0;
+
+/// How much the wave moves at `now` away from the music (0 still, 1 full):
+/// it eases in and out of each roll.
+pub fn roll(now: f64) -> f32 {
+    let p = now.rem_euclid(ROLL_EVERY);
+    if p >= ROLL_LEN {
+        return 0.0;
+    }
+    let s = (std::f64::consts::PI * p / ROLL_LEN).sin();
+    (s * s) as f32
+}
+
+/// Is a roll under way at `now`?
+pub fn rolling(now: f64) -> bool {
+    now.rem_euclid(ROLL_EVERY) < ROLL_LEN
+}
+
+/// When the next roll starts.
+pub fn next_roll(now: f64) -> f64 {
+    now - now.rem_euclid(ROLL_EVERY) + ROLL_EVERY
+}
 
 pub fn on(theme: Theme) -> bool {
     theme == Theme::Light
@@ -65,33 +104,48 @@ fn shapes() -> &'static Shapes {
 }
 
 /// The wave `w` DIPs wide, centred on `cx`, its foot on `base_y`, inside
-/// `clip`. `moving` sways it with the time `now` (the music pill while it
-/// plays); otherwise it stands still.
-pub fn draw(c: &mut Canvas, cx: f32, base_y: f32, w: f32, clip: Rect, now: f64, moving: bool) {
+/// `clip`, at the time `now`. `amp` is how much it moves: 0 stands it
+/// still, 1 is the full motion (see [`roll`]).
+pub fn draw(c: &mut Canvas, cx: f32, base_y: f32, w: f32, clip: Rect, now: f64, amp: f32) {
     let k = w / BOX_W;
-    let (sway, swell) = if moving { ((TAU * now / SWAY).sin() as f32, (0.5 + 0.5 * (TAU * now / SWELL).sin()) as f32) } else { (0.0, 0.0) };
-    // The higher a point, the further it leans and lifts: the foot stays put.
+    let amp = amp.clamp(0.0, 1.0);
+    let sway = amp * (TAU * now / SWAY).sin() as f32;
+    let swell = amp * (0.5 + 0.5 * (TAU * now / SWELL).sin()) as f32;
+    let to_canvas = |x: f32, y: f32| (cx + (x - BOX_W / 2.0) * k, base_y + (y - BOX_H) * k);
+    // A ripple runs along the water, stronger towards the crest; the higher
+    // a point, the further it leans and lifts with the swell.
     let map = |x: f32, y: f32| {
         let up = (BOX_H - y) / BOX_H;
+        let ripple = amp * (TAU * (x as f64 / RIPPLE_LEN - now / RIPPLE)).sin() as f32;
         let x = x + sway * 5.0 * up * up;
-        let y = y - swell * 3.0 * up;
-        (cx + (x - BOX_W / 2.0) * k, base_y + (y - BOX_H) * k)
+        let y = y - swell * 3.0 * up - ripple * 2.2 * (0.35 + 0.65 * up);
+        to_canvas(x, y)
     };
     let s = shapes();
     let stroke = (0.9 * k).max(0.6);
     c.clip(clip);
     c.unthemed(|c| {
+        // Fuji is far off: it keeps still while the water moves.
         if w >= 34.0 {
-            c.path(&place(&s.fuji, &map), Some(MID), None);
-            c.path(&place(&s.snow, &map), Some(FOAM), None);
+            c.path(&place(&s.fuji, &to_canvas), Some(MID), None);
+            c.path(&place(&s.snow, &to_canvas), Some(FOAM), None);
         }
         c.path(&place(&s.body, &map), Some(DEEP), None);
         c.path(&place(&s.band_mid, &map), Some(MID), None);
         c.path(&place(&s.band_pale, &map), Some(PALE), None);
         c.path(&place(&s.crest, &map), Some(FOAM), Some((DEEP, stroke)));
-        for (x, y, r) in SPRAY {
-            let (px, py) = map(x, y);
-            c.fill_circle(Point::new(px, py), (r * k).max(0.8), PALE);
+        // Spray: still drops at rest; while it moves, each drop flies up
+        // and out from under the curl and fades, one after another.
+        for (i, (x, y, r)) in SPRAY.into_iter().enumerate() {
+            if amp <= 0.0 {
+                let (px, py) = map(x, y);
+                c.fill_circle(Point::new(px, py), (r * k).max(0.8), PALE);
+                continue;
+            }
+            let p = (now / SPRAY_LIFE + i as f64 * 0.27).rem_euclid(1.0) as f32;
+            let (px, py) = map(x + 3.0 * p, y - 7.0 * p);
+            let alpha = (amp * (1.0 - p) * 1.4).min(1.0);
+            c.with_alpha(alpha, |c| c.fill_circle(Point::new(px, py), (r * k * (1.0 - 0.4 * p)).max(0.7), PALE));
         }
     });
     c.unclip();
@@ -136,6 +190,17 @@ mod tests {
             let segs = svgpath::parse(d).expect(d);
             assert!(segs.len() > 2, "{d}");
         }
+    }
+
+    #[test]
+    fn it_rolls_now_and_then_and_rests_between() {
+        assert_eq!(roll(0.0), 0.0, "a roll eases in");
+        assert!(roll(ROLL_LEN / 2.0) > 0.99, "full motion mid-roll");
+        assert_eq!(roll(ROLL_LEN + 0.1), 0.0);
+        assert!(rolling(1.0) && !rolling(ROLL_LEN + 0.1));
+        assert_eq!(next_roll(ROLL_LEN + 1.0), ROLL_EVERY);
+        assert_eq!(next_roll(ROLL_EVERY), 2.0 * ROLL_EVERY);
+        assert!(ROLL_LEN < ROLL_EVERY);
     }
 
     #[test]

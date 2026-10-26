@@ -78,6 +78,16 @@ const WAVE_CLOCK_W: f32 = 26.0;
 const WAVE_CLOCK_LEAD: f32 = 12.0 + WAVE_CLOCK_W;
 const WAVE_MEDIA_W: f32 = 28.0;
 
+/// Light theme: does the wave show in this idle look, and how much does it
+/// move now (a roll now and then, none on battery saver)?
+fn wave_idle(st: &AppState) -> bool {
+    crate::wave::on(st.settings.theme) && matches!(st.settings.idle_style, IdleStyle::Clock | IdleStyle::Status | IdleStyle::Eyes)
+}
+
+fn wave_roll(st: &AppState) -> f32 {
+    if st.power.saver { 0.0 } else { crate::wave::roll(st.now) }
+}
+
 /// The readout over games: room for "999 fps", "GPU 100% · 100°" and
 /// "CPU 100%" with dividers (tabular digits keep it still as numbers
 /// change), and without the temperature when the driver reports none.
@@ -242,11 +252,16 @@ fn hidden_strip() -> Geom {
     Geom::new(150.0, 5.0, 2.5)
 }
 
-/// Needs continuous ambient frames (near 60 fps): animated equalizer while music plays.
+/// Needs continuous ambient frames (near 60 fps): animated equalizer while music plays,
+/// and the Light theme's wave while it rolls.
 /// A paused (lingering) pill is static.
 pub fn is_live(m: &Mode, st: &AppState) -> bool {
     if let Some(live) = crate::pill::is_live(m, st) {
         return live;
+    }
+    // The Light theme's wave while it rolls.
+    if *m == Mode::Idle && wave_idle(st) && !st.power.saver && crate::wave::rolling(st.now) {
+        return true;
     }
     let Some(media) = st.media.as_ref() else { return false };
     match m {
@@ -270,6 +285,9 @@ pub fn next_wake(m: &Mode, st: &AppState) -> Option<f64> {
     if *m == Mode::Idle && st.settings.idle_style == IdleStyle::Eyes && !crate::wave::on(st.settings.theme) {
         let phase = now % BLINK_PERIOD;
         consider(if phase < BLINK_LEN { now - phase + BLINK_LEN } else { now - phase + BLINK_PERIOD });
+    }
+    if *m == Mode::Idle && wave_idle(st) && !st.power.saver {
+        consider(crate::wave::next_roll(now));
     }
     if !matches!(m, Mode::Expanded(_)) {
         if let Some(end) = media_grace_end(st) {
@@ -321,7 +339,7 @@ fn draw_idle(ui: &mut Ui, st: &mut AppState, body: Rect) {
         IdleStyle::Clock | IdleStyle::Status => {
             // Light theme: the wave on the left, the clock centred in the rest.
             let body = if crate::wave::on(st.settings.theme) {
-                crate::wave::draw(ui.c, body.x + 11.0 + WAVE_CLOCK_W / 2.0, body.bottom() - 5.0, WAVE_CLOCK_W, body, st.now, false);
+                crate::wave::draw(ui.c, body.x + 11.0 + WAVE_CLOCK_W / 2.0, body.bottom() - 5.0, WAVE_CLOCK_W, body, st.now, wave_roll(st));
                 Rect::new(body.x + WAVE_CLOCK_LEAD, body.y, body.w - WAVE_CLOCK_LEAD, body.h)
             } else {
                 body
@@ -353,7 +371,7 @@ fn draw_idle(ui: &mut Ui, st: &mut AppState, body: Rect) {
             ui.c.text(&time, Rect::new(x0 + bw + BADGE_GAP, body.y, tw + 2.0, body.h), &ts);
         }
         IdleStyle::Eyes if crate::wave::on(st.settings.theme) => {
-            crate::wave::draw(ui.c, body.center().x, body.bottom() - 5.0, WAVE_IDLE_W, body, st.now, false);
+            crate::wave::draw(ui.c, body.center().x, body.bottom() - 5.0, WAVE_IDLE_W, body, st.now, wave_roll(st));
         }
         IdleStyle::Eyes => {
             let blink = (st.now % BLINK_PERIOD) < BLINK_LEN;
@@ -453,7 +471,7 @@ pub fn draw_music(ui: &mut Ui, st: &mut AppState, body: Rect, words: bool) {
     let eq = Rect::new(body.right() - 34.0, cy - 8.0, 20.0, 16.0);
     let alpha = if words { peek_alpha(st, body.w) } else { 0.0 };
     if crate::wave::on(st.settings.theme) {
-        crate::wave::draw(ui.c, body.right() - 26.0, body.bottom() - 5.0, WAVE_MEDIA_W, body, st.now, playing);
+        crate::wave::draw(ui.c, body.right() - 26.0, body.bottom() - 5.0, WAVE_MEDIA_W, body, st.now, if playing { 1.0 } else { 0.0 });
     } else {
         equalizer(ui, eq, st.media_accent(), playing, st.now);
     }

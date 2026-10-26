@@ -12,7 +12,7 @@ concurrency:
 
 env:
   # Keep in sync with Cargo.toml's workspace version, installer/dyna-island.nsi and installer/dyna-island.iss.
-  DYNA_VERSION: "0.2.4"
+  DYNA_VERSION: "0.3.0"
 
 jobs:
   core:

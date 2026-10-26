@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod frames;
 pub mod fullscreen;
 pub mod imaging;
+pub mod inuse;
 pub mod media;
 pub mod power;
 pub mod psu;
@@ -28,6 +29,7 @@ pub struct Services {
     media: Option<media::MediaService>,
     _audio: Option<audio::AudioService>,
     _bluetooth: Option<bluetooth::BluetoothService>,
+    _inuse: Option<inuse::InUseWatch>,
     fullscreen: Option<fullscreen::FullscreenWatcher>,
     clip: Option<clipboard::ClipboardHistory>,
 }
@@ -50,9 +52,10 @@ impl Services {
         let media = started("media", media::MediaService::start(sink.clone()));
         let audio = started("audio", audio::AudioService::start(sink.clone()));
         let bluetooth = started("bluetooth", bluetooth::BluetoothService::start(sink.clone()));
+        let inuse = started("camera and mic", inuse::InUseWatch::start(sink.clone()));
         let fullscreen = started("fullscreen", fullscreen::FullscreenWatcher::start(helper, sink.clone()));
         let clip = started("clipboard history", clipboard::ClipboardHistory::start(sink.clone(), settings.clipboard_history));
-        Self { media, _audio: audio, _bluetooth: bluetooth, fullscreen, clip }
+        Self { media, _audio: audio, _bluetooth: bluetooth, _inuse: inuse, fullscreen, clip }
     }
 
     pub fn stop(self, _helper: HWND) {

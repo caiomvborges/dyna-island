@@ -56,6 +56,8 @@ pub enum Command {
     AgendaPasteLink,
     /// The Agenda page's Remove link: forget the calendar and its meetings.
     AgendaRemoveLink,
+    /// Join an online meeting (its checked join link), then close the island.
+    JoinMeeting(String),
     /// Bring forward the app that plays (the Music page's player name).
     OpenPlayer,
     /// Open an app from the Dock (a program, a shortcut, …).

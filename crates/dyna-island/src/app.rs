@@ -70,6 +70,9 @@ const WTS_SESSION_UNLOCK_: usize = 8;
 /// move, new ones come in), and no more than this often as the Agenda page opens.
 const AGENDA_EVERY_S: f64 = 300.0;
 const AGENDA_OPEN_S: f64 = 30.0;
+/// How long after the display comes on, or the charger goes in or out, a
+/// brightness change counts as Windows' own.
+const BRIGHTNESS_QUIET_S: f64 = 3.0;
 
 
 thread_local! {
@@ -428,6 +431,9 @@ pub struct App {
     /// Session locked / display off: pause ambient animation.
     locked: bool,
     display_off: bool,
+    /// Brightness changes before this (mono s) were Windows' own (the display
+    /// coming on, the charger going in or out), not the person's: no pop-up.
+    quiet_brightness_until: f64,
     tray_retries: u32,
     /// Content of the previous mode, fading out while the outline morphs:
     /// (mode, start time, its geometry, the opacity it fades from).
@@ -601,6 +607,7 @@ impl App {
             page_switch_t: 0.0,
             locked: false,
             display_off: false,
+            quiet_brightness_until: 0.0,
             tray_retries: 0,
             outgoing: None,
             page_anim: None,
@@ -901,7 +908,17 @@ impl App {
                         // release can't click the pill a second time.
                         self.input.pressed_id = None;
                         self.run_inline_action(a);
+                    } else if self.input.pressed_id == Some(wid("meeting.join")) {
+                        // The meeting's Join: straight into the meeting.
+                        self.input.pressed_id = None;
+                        if let Some(link) = crate::activities::meeting_join(&self.st) {
+                            shell::open_join(&link);
+                        }
                     } else {
+                        // A click on the meeting's island opens the Agenda.
+                        if self.st.notice.is_none() && self.st.hud.is_none() && crate::activities::resting_mode(&self.st) == Mode::Activity(activities::Activity::Meeting) {
+                            self.st.page = PageKind::Agenda;
+                        }
                         // Clicking a notice jumps to its page.
                         if let Some(n) = self.st.notice.take() {
                             match n.action {
@@ -1137,6 +1154,10 @@ impl App {
             WM_POWERBROADCAST => {
                 if let Some(on) = services::power::display_state_change(wp, lp) {
                     self.display_off = !on;
+                    self.quiet_brightness_until = clock::mono() + BRIGHTNESS_QUIET_S;
+                }
+                if let Some(b) = services::power::brightness_change(wp, lp) {
+                    self.on_event(AppEvent::Brightness(b));
                 }
                 let p = services::power::query();
                 self.on_event(AppEvent::Power(p));
@@ -1191,11 +1212,13 @@ impl App {
                 }
                 if !self.hovering || self.expanded {
                     self.hover_arm = None;
-                } else if self.st.notice.as_ref().is_some_and(|n| n.inline.is_some()) {
-                    // A notice with an inline pill stays put under a resting
-                    // pointer so the pill can be clicked (a click on the rest
-                    // of the notice still opens its page). The dwell stays
-                    // armed: the next movement restarts it.
+                } else if self.st.notice.as_ref().is_some_and(|n| n.inline.is_some())
+                    || (crate::activities::collapsed_mode(&self.st) == Mode::Activity(activities::Activity::Meeting) && crate::activities::meeting_join(&self.st).is_some())
+                {
+                    // A notice with an inline pill, and a meeting with Join,
+                    // stay put under a resting pointer so the pill can be
+                    // clicked (a click on the rest still opens its page). The
+                    // dwell stays armed: the next movement restarts it.
                 } else {
                     self.expand();
                 }
@@ -1468,12 +1491,35 @@ impl App {
             AppEvent::Power(p) => {
                 let old = self.st.power;
                 self.st.power = p;
+                if p.on_ac != old.on_ac {
+                    // Windows may move the brightness to the plan's other setting.
+                    self.quiet_brightness_until = self.st.now + BRIGHTNESS_QUIET_S;
+                }
                 if self.st.settings.hud_power && p.has_battery {
                     if p.on_ac != old.on_ac {
-                        self.st.show_hud(HudKind::Charging { percent: p.percent, plugged: p.on_ac }, 2.2);
-                    } else if !p.on_ac && ((old.percent > 20 && p.percent <= 20) || (old.percent > 10 && p.percent <= 10)) {
+                        // The battery fills up to the charge as the charger goes in.
+                        self.st.ui.hud_charge = if p.on_ac { 0.0 } else { f32::from(p.percent) };
+                        self.st.show_hud(HudKind::Charging { percent: p.percent, plugged: p.on_ac }, 2.4);
+                    } else if p.on_ac && old.percent < 100 && p.percent == 100 {
+                        self.st.ui.hud_charge = 100.0;
+                        self.st.show_hud(HudKind::Charging { percent: 100, plugged: true }, 3.0);
+                    } else if !p.on_ac && [20, 10, 5].iter().any(|&at| old.percent > at && p.percent <= at) {
                         self.st.show_hud(HudKind::LowBattery { percent: p.percent }, 4.0);
                     }
+                }
+            }
+            AppEvent::Brightness(b) => {
+                let old = self.st.brightness.replace(b);
+                let quiet = self.st.now < self.quiet_brightness_until || self.locked || self.display_off;
+                if old.is_some_and(|o| o != b) && !quiet && self.st.settings.hud_brightness {
+                    self.st.show_hud(HudKind::Brightness { level: b as f32 / 100.0 }, 1.6);
+                }
+            }
+            AppEvent::InUse(now) => {
+                let old = std::mem::replace(&mut self.st.in_use, now.clone());
+                pinfo!("in use: camera [{}], mic [{}]", now.camera.join(", "), now.mic.join(", "));
+                if self.st.settings.in_use && now.started_since(&old) {
+                    self.st.show_hud(HudKind::InUse(now), 2.6);
                 }
             }
             AppEvent::Bluetooth { name, connected, battery, audio } => {
@@ -2910,6 +2956,10 @@ impl App {
                     }
                 }
                 Command::Collapse => self.collapse(),
+                Command::JoinMeeting(link) => {
+                    shell::open_join(&link);
+                    self.collapse();
+                }
                 Command::Play(s) => services::sound::play(s),
                 Command::WantStats(b) => self.set_stats(b),
                 Command::SetAutostart(on) => {

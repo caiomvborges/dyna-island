@@ -75,7 +75,7 @@ pub fn geom(a: Activity, st: &AppState) -> Option<Geom> {
         Activity::Timer => TIMER_W,
         Activity::MediaTimer => MEDIA_TIMER_W,
         Activity::Game => game_w(st),
-        Activity::Meeting => crate::activities::MEETING_W,
+        Activity::Meeting => crate::activities::meeting_w(st),
     };
     Some(capsule(w))
 }

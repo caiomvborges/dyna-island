@@ -68,6 +68,12 @@ pub enum Icon {
     Stop,
     /// Record (Dyna Island Recorder): a dot that fits inside `Circle`.
     Record,
+    /// A video camera: join a meeting, the camera in use.
+    Video,
+    /// A microphone in use.
+    Mic,
+    /// The screen's brightness.
+    Sun,
 }
 
 pub struct Part {
@@ -234,6 +240,22 @@ pub fn parts(icon: Icon) -> &'static [Part] {
         ],
         Stop => p![f("M8.2 6.5h7.6a1.7 1.7 0 0 1 1.7 1.7v7.6a1.7 1.7 0 0 1-1.7 1.7H8.2a1.7 1.7 0 0 1-1.7-1.7V8.2a1.7 1.7 0 0 1 1.7-1.7z")],
         Record => p![f("M6.5 12a5.5 5.5 0 1 0 11 0a5.5 5.5 0 1 0-11 0z")],
+        Video => p![
+            s("M4.5 7h9A1.5 1.5 0 0 1 15 8.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 3 15.5v-7A1.5 1.5 0 0 1 4.5 7z"),
+            s("M15 10.5l5-3v9l-5-3"),
+        ],
+        Mic => p![s("M9 6a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0z"), s("M5.5 11a6.5 6.5 0 0 0 13 0"), s("M12 17.5V21")],
+        Sun => p![
+            s("M8 12a4 4 0 1 0 8 0a4 4 0 1 0-8 0"),
+            s("M12 2.5v2"),
+            s("M12 19.5v2"),
+            s("M2.5 12h2"),
+            s("M19.5 12h2"),
+            s("M5.3 5.3l1.4 1.4"),
+            s("M17.3 17.3l1.4 1.4"),
+            s("M5.3 18.7l1.4-1.4"),
+            s("M17.3 6.7l1.4-1.4"),
+        ],
     }
 }
 
@@ -249,7 +271,7 @@ mod tests {
         Icon::Pin, Icon::PinFill, Icon::File, Icon::Trash, Icon::Undo, Icon::Reset,
         Icon::Sliders,
         Icon::Gear,
-        Icon::Gauge, Icon::App, Icon::Windows, Icon::Addons, Icon::Stop, Icon::Script, Icon::Dock, Icon::Note, Icon::Bell, Icon::Open, Icon::Agenda, Icon::Record,
+        Icon::Gauge, Icon::App, Icon::Windows, Icon::Addons, Icon::Stop, Icon::Script, Icon::Dock, Icon::Note, Icon::Bell, Icon::Open, Icon::Agenda, Icon::Record, Icon::Video, Icon::Mic, Icon::Sun,
     ];
 
     #[test]

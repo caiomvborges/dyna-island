@@ -82,6 +82,10 @@ pub enum HudKind {
     Charging { percent: u8, plugged: bool },
     Bluetooth { name: String, connected: bool, battery: Option<u8>, audio: bool },
     LowBattery { percent: u8 },
+    /// The screen's brightness (0..=1).
+    Brightness { level: f32 },
+    /// An app started using the camera or the microphone.
+    InUse(dyna_core::inuse::InUse),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -132,6 +136,9 @@ pub struct PageUiState {
     pub clip_flash: Option<(usize, f64)>,
     /// Volume HUD bar position, gliding toward the real level.
     pub hud_level: f32,
+    /// The charging pop-up's battery, filling up to the real charge (from 0
+    /// as the charger goes in).
+    pub hud_charge: f32,
     /// Collapsed media pill shows the track title until this mono time.
     pub peek_until: f64,
     /// Header tab under the pointer and since when (for hover labels).
@@ -233,6 +240,10 @@ pub struct AppState {
     pub pomodoro: Pomodoro,
     pub volume: VolumeState,
     pub power: PowerState,
+    /// The apps using the camera and the microphone now (`services::inuse`).
+    pub in_use: dyna_core::inuse::InUse,
+    /// The screen's brightness (0..=100) once Windows told it.
+    pub brightness: Option<u32>,
     pub hud: Option<Hud>,
     pub notice: Option<Notice>,
     pub clip: ClipHistory,
@@ -306,6 +317,8 @@ impl AppState {
             pomodoro,
             volume: VolumeState::default(),
             power: PowerState::default(),
+            in_use: Default::default(),
+            brightness: None,
             hud: None,
             notice: None,
             clip: ClipHistory::default(),

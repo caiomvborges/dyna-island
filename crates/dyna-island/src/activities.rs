@@ -1,6 +1,8 @@
 //! What the collapsed island shows: idle pill, live activities (media,
-//! timer, the readout over games), HUD
-//! pop-ups (volume, charging, Bluetooth) and notices.
+//! timer, the readout over games, the next meeting), HUD pop-ups (volume,
+//! brightness, charging, Bluetooth, the camera or mic in use) and notices.
+//! While an app uses the camera or the microphone a dot sits at the closed
+//! island's right end, in room made for it.
 //!
 //! Collapsed pills are sized to their content: Windows has no camera
 //! cut-out to work around, so empty black would only cover the browser tabs.
@@ -35,6 +37,8 @@ pub enum HudTag {
     Charging,
     Bluetooth,
     LowBattery,
+    Brightness,
+    InUse,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,8 +94,24 @@ fn wave_breaks(st: &AppState) -> bool {
 const GAME_W: f32 = 276.0;
 const GAME_NO_TEMP_W: f32 = 236.0;
 const GAME_DIVIDER: Color = Color::white(0.18);
-/// The next meeting: the calendar, its subject, and "in 8 min".
-pub(crate) const MEETING_W: f32 = 280.0;
+/// The next meeting: the calendar, its subject, and "in 8 min"; with a join
+/// link, a Join pill on the right too.
+const MEETING_W: f32 = 280.0;
+const MEETING_JOIN_W: f32 = 360.0;
+
+/// The meeting's island width (shared with the Pill theme's capsule).
+pub(crate) fn meeting_w(st: &AppState) -> f32 {
+    if meeting_join(st).is_some() {
+        MEETING_JOIN_W
+    } else {
+        MEETING_W
+    }
+}
+
+/// The counting-down meeting's join link, when it has one.
+pub(crate) fn meeting_join(st: &AppState) -> Option<String> {
+    st.meeting_countdown().map(|(m, _)| m.join.clone()).filter(|j| !j.is_empty())
+}
 
 /// Modes with the same key share content (no cross-fade between them).
 pub fn content_key(m: &Mode) -> u32 {
@@ -115,6 +135,33 @@ fn hud_tag(k: &HudKind) -> HudTag {
         HudKind::Charging { .. } => HudTag::Charging,
         HudKind::Bluetooth { .. } => HudTag::Bluetooth,
         HudKind::LowBattery { .. } => HudTag::LowBattery,
+        HudKind::Brightness { .. } => HudTag::Brightness,
+        HudKind::InUse(_) => HudTag::InUse,
+    }
+}
+
+/// The dot for the camera or microphone in use, and the room it takes at
+/// the closed island's right end.
+const IN_USE_ROOM: f32 = 14.0;
+const IN_USE_DOT: f32 = 3.0;
+
+/// The dot's colour while an app uses the camera (green) or only the
+/// microphone (orange), on the closed island: not on the open one, the
+/// stepped-aside strip, the Hidden look or the pop-up saying so.
+fn in_use_dot(m: &Mode, st: &AppState) -> Option<Color> {
+    let shown = match m {
+        Mode::Expanded(_) | Mode::Aside | Mode::Hud(HudTag::InUse) => false,
+        Mode::Idle => st.settings.idle_style != IdleStyle::Hidden,
+        _ => true,
+    };
+    if !shown || !st.settings.in_use {
+        None
+    } else if !st.in_use.camera.is_empty() {
+        Some(palette::GREEN)
+    } else if !st.in_use.mic.is_empty() {
+        Some(palette::ORANGE)
+    } else {
+        None
     }
 }
 
@@ -196,9 +243,14 @@ fn clock_badge(st: &AppState) -> Option<ClockBadge> {
 }
 
 pub fn geom(m: &Mode, st: &AppState) -> Geom {
-    if let Some(g) = crate::pill::geom(m, st) {
-        return g;
+    let mut g = crate::pill::geom(m, st).unwrap_or_else(|| classic_geom(m, st));
+    if in_use_dot(m, st).is_some() {
+        g.w += IN_USE_ROOM;
     }
+    g
+}
+
+fn classic_geom(m: &Mode, st: &AppState) -> Geom {
     match m {
         Mode::Idle => match st.settings.idle_style {
             // The status bar is the Pill theme's; the other themes show the clock.
@@ -229,8 +281,9 @@ pub fn geom(m: &Mode, st: &AppState) -> Geom {
         }
         Mode::Activity(Activity::MediaTimer) => Geom::new(132.0, 32.0, 15.0),
         Mode::Activity(Activity::Game) => Geom::new(if game_temp(st).is_some() { GAME_W } else { GAME_NO_TEMP_W }, 32.0, 15.0),
-        Mode::Activity(Activity::Meeting) => Geom::new(MEETING_W, 32.0, 15.0),
-        Mode::Hud(HudTag::Volume) => Geom::new(316.0, 40.0, 19.0),
+        Mode::Activity(Activity::Meeting) => Geom::new(meeting_w(st), 32.0, 15.0),
+        Mode::Hud(HudTag::Volume) | Mode::Hud(HudTag::Brightness) => Geom::new(316.0, 40.0, 19.0),
+        Mode::Hud(HudTag::InUse) => Geom::new(336.0, 46.0, 22.0),
         Mode::Hud(HudTag::Charging) | Mode::Hud(HudTag::LowBattery) => Geom::new(300.0, 40.0, 19.0),
         Mode::Hud(HudTag::Bluetooth) => Geom::new(336.0, 46.0, 22.0),
         Mode::Notice => Geom::new(372.0, 52.0, 24.0),
@@ -307,6 +360,14 @@ const BLINK_PERIOD: f64 = 5.5;
 const BLINK_LEN: f64 = 0.14;
 
 pub fn draw(ui: &mut Ui, st: &mut AppState, m: &Mode, body: Rect) {
+    // The camera or mic in use: the dot in its room, the rest as usual beside it.
+    let body = match in_use_dot(m, st) {
+        Some(col) if body.w > IN_USE_ROOM * 2.0 => {
+            ui.c.fill_circle(Point::new(body.right() - IN_USE_ROOM / 2.0 - 5.0, body.center().y), IN_USE_DOT, col);
+            Rect::new(body.x, body.y, body.w - IN_USE_ROOM, body.h)
+        }
+        _ => body,
+    };
     if crate::pill::draw(ui, st, m, body) {
         return;
     }
@@ -474,16 +535,24 @@ pub fn draw_music(ui: &mut Ui, st: &mut AppState, body: Rect, words: bool) {
 }
 
 /// The next meeting, collapsed: the calendar, the subject, and how long until
-/// it starts in the accent (shared with the Pill theme's capsule).
+/// it starts in the accent, then Join when it has a link (shared with the
+/// Pill theme's capsule). The app takes a press on Join
+/// (`wid("meeting.join")`) without opening the island.
 pub(crate) fn draw_meeting(ui: &mut Ui, st: &AppState, body: Rect) {
     let Some((m, until)) = st.meeting_countdown() else { return };
     let cy = body.center().y;
     let col = st.accent;
     ui.c.icon(Icon::Agenda, Rect::new(body.x + 14.0, cy - 8.0, 16.0, 16.0), col);
+    let mut right = body.right() - 16.0;
+    if !m.join.is_empty() {
+        let w = ui.pill_width("Join", true, true);
+        let r = Rect::new(body.right() - 8.0 - w, cy - PILL_SMALL / 2.0, w, PILL_SMALL);
+        ui.pill(wid("meeting.join"), r, "Join", Some(Icon::Video), PillStyle::Primary(col));
+        right = r.x - 10.0;
+    }
     let when = dyna_core::agenda::fmt_until(until);
     let when_st = TextStyle::body().weight(Weight::Semibold).tabular().color(col).right();
     let ww = ui.c.measure(&when, &when_st, 200.0).0.ceil();
-    let right = body.right() - 16.0;
     ui.c.text(&when, Rect::new(right - ww - 2.0, body.y, ww + 2.0, body.h), &when_st);
     let x = body.x + 38.0;
     let subject = if m.subject.is_empty() { "Meeting" } else { m.subject.as_str() };
@@ -596,35 +665,32 @@ fn draw_hud(ui: &mut Ui, st: &mut AppState, body: Rect) {
                 Icon::Volume
             };
             ui.c.icon(icon, icon_r, palette::TEXT);
-            // The bar stops 62 DIPs short so "100%" and "Muted" keep a gap.
-            let bar = Rect::new(body.x + 48.0, cy - 3.0, body.w - 48.0 - 62.0, 6.0);
-            // The bar glides to new levels; the number is exact immediately.
-            let target = if muted { 0.0 } else { level };
-            let cur = st.ui.hud_level;
-            let shown = if (cur - target).abs() > 0.002 {
-                ui.request_anim();
-                cur + (target - cur) * 0.32
-            } else {
-                target
-            };
-            st.ui.hud_level = shown;
-            ui.c.fill_rrect(bar, 3.0, palette::TRACK);
-            if shown > 0.0 {
-                // Classic fills the level in white; a look with its own accent (Light's blue) in it.
-                let level = match ui.c.look().accent {
-                    Some(a) => a,
-                    None => Color::white(0.95),
-                };
-                ui.c.fill_rrect(Rect::new(bar.x, bar.y, (bar.w * shown).max(6.0), bar.h), 3.0, level);
-            }
             let pct = if muted { "Muted".to_string() } else { format!("{}%", (level * 100.0).round() as i32) };
-            ui.c.text(&pct, Rect::new(body.right() - HUD_PAD - 48.0, body.y, 48.0, body.h), &label_st.tabular().right());
+            level_bar(ui, st, body, if muted { 0.0 } else { level }, &pct);
+        }
+        HudKind::Brightness { level } => {
+            ui.c.icon(Icon::Sun, icon_r, palette::TEXT);
+            level_bar(ui, st, body, level, &format!("{}%", (level * 100.0).round() as i32));
+        }
+        HudKind::InUse(now) => {
+            let c = Point::new(body.x + 30.0, cy);
+            let (col, icon) = if now.camera.is_empty() { (palette::ORANGE, Icon::Mic) } else { (palette::GREEN, Icon::Video) };
+            ui.c.fill_circle(c, 15.0, col.with_alpha(0.22));
+            ui.c.icon(icon, Rect::from_center(c, 17.0, 17.0), col);
+            let (x, w) = (body.x + 54.0, body.w - 54.0 - HUD_PAD);
+            ui.c.text(now.label(), Rect::new(x, cy - 17.0, w, 18.0), &label_st);
+            ui.c.text(&now.apps(), Rect::new(x, cy + 1.0, w, 16.0), &TextStyle::footnote().color(palette::TEXT_DIM));
         }
         HudKind::Charging { percent, plugged } => {
-            let (icon, color, label) = if plugged { (Icon::Bolt, palette::GREEN, "Charging") } else { (Icon::Battery, palette::TEXT, "On battery") };
+            let (icon, color, label) = match (plugged, percent) {
+                (true, 100) => (Icon::Bolt, palette::GREEN, "Fully charged"),
+                (true, _) => (Icon::Bolt, palette::GREEN, "Charging"),
+                _ => (Icon::Battery, palette::TEXT, "On battery"),
+            };
             ui.c.icon(icon, icon_r, color);
             ui.c.text(label, Rect::new(body.x + 46.0, body.y, 140.0, body.h), &label_st);
-            battery_badge(ui, body.right() - HUD_PAD, cy, percent, color);
+            let fill = charge_fill(ui, st, percent);
+            battery_badge_filled(ui, body.right() - HUD_PAD, cy, percent, fill, color);
         }
         HudKind::LowBattery { percent } => {
             ui.c.icon(Icon::Battery, icon_r, palette::RED);
@@ -652,9 +718,62 @@ fn draw_hud(ui: &mut Ui, st: &mut AppState, body: Rect) {
     }
 }
 
+/// The volume or brightness pop-up's level bar, gliding to `target`
+/// (0..=1), and `value` at the right; the number is exact immediately.
+fn level_bar(ui: &mut Ui, st: &mut AppState, body: Rect, target: f32, value: &str) {
+    let cy = body.center().y;
+    // The bar stops 62 DIPs short so "100%" and "Muted" keep a gap.
+    let bar = Rect::new(body.x + 48.0, cy - 3.0, body.w - 48.0 - 62.0, 6.0);
+    let shown = glide_level(ui, st, target);
+    ui.c.fill_rrect(bar, 3.0, palette::TRACK);
+    if shown > 0.0 {
+        // Classic fills the level in white; a look with its own accent (Light's blue) in it.
+        let level = match ui.c.look().accent {
+            Some(a) => a,
+            None => Color::white(0.95),
+        };
+        ui.c.fill_rrect(Rect::new(bar.x, bar.y, (bar.w * shown).max(6.0), bar.h), 3.0, level);
+    }
+    let ts = TextStyle::body().weight(Weight::Semibold).tabular().right();
+    ui.c.text(value, Rect::new(body.right() - HUD_PAD - 48.0, body.y, 48.0, body.h), &ts);
+}
+
+/// The level bar's position (shared with the Pill theme), a step nearer
+/// `target` each frame.
+pub(crate) fn glide_level(ui: &mut Ui, st: &mut AppState, target: f32) -> f32 {
+    let cur = st.ui.hud_level;
+    let shown = if (cur - target).abs() > 0.002 {
+        ui.request_anim();
+        cur + (target - cur) * 0.32
+    } else {
+        target
+    };
+    st.ui.hud_level = shown;
+    shown
+}
+
+/// How full the charging pop-up's battery is drawn (0..=100): it fills up to
+/// `percent` from where the app left it as the charger went in.
+pub(crate) fn charge_fill(ui: &mut Ui, st: &mut AppState, percent: u8) -> u8 {
+    let (cur, target) = (st.ui.hud_charge, f32::from(percent));
+    let shown = if (target - cur).abs() > 0.5 {
+        ui.request_anim();
+        cur + (target - cur) * 0.12
+    } else {
+        target
+    };
+    st.ui.hud_charge = shown;
+    shown.round().clamp(0.0, 100.0) as u8
+}
+
 /// A small drawn battery and the percentage, right-aligned to `right` and
 /// centred on `cy`. Returns the badge's left edge.
 fn battery_badge(ui: &mut Ui, right: f32, cy: f32, percent: u8, color: Color) -> f32 {
+    battery_badge_filled(ui, right, cy, percent, percent, color)
+}
+
+/// [`battery_badge`] with the battery drawn `fill` full.
+fn battery_badge_filled(ui: &mut Ui, right: f32, cy: f32, percent: u8, fill: u8, color: Color) -> f32 {
     let ts = TextStyle::body().weight(Weight::Semibold).tabular();
     let label = format!("{percent}%");
     let (tw, _) = ui.c.measure(&label, &ts, 100.0);
@@ -665,7 +784,7 @@ fn battery_badge(ui: &mut Ui, right: f32, cy: f32, percent: u8, color: Color) ->
     let y = snap(ui, cy - 5.0);
     ui.c.stroke_rrect(Rect::new(x, y, 20.0, 10.0), 3.0, palette::TEXT_DIM, 1.3);
     ui.c.fill_rrect(Rect::new(x + 20.0, y + 3.0, 1.5, 4.0), 0.75, palette::TEXT_DIM);
-    let p = (percent as f32 / 100.0).clamp(0.0, 1.0);
+    let p = (fill as f32 / 100.0).clamp(0.0, 1.0);
     if p > 0.0 {
         ui.c.fill_rrect(Rect::new(x + 2.0, y + 2.0, (16.0 * p).max(3.0), 6.0), 1.5, color);
     }
@@ -748,6 +867,46 @@ mod tests {
     }
 
 
+
+    #[test]
+    fn camera_or_mic_in_use_puts_a_dot_on_the_closed_island() {
+        let mut st = playing();
+        let media = Mode::Activity(Activity::Media);
+        let plain = geom(&media, &st).w;
+        st.in_use.mic = vec!["Zoom".into()];
+        assert_eq!(in_use_dot(&media, &st), Some(palette::ORANGE));
+        assert_eq!(geom(&media, &st).w, plain + IN_USE_ROOM);
+        st.in_use.camera = vec!["Teams".into()];
+        assert_eq!(in_use_dot(&media, &st), Some(palette::GREEN));
+        // Not on the open island, the strip or the pop-up saying so.
+        assert_eq!(in_use_dot(&Mode::Expanded(PageKind::Media), &st), None);
+        assert_eq!(in_use_dot(&Mode::Aside, &st), None);
+        assert_eq!(in_use_dot(&Mode::Hud(HudTag::InUse), &st), None);
+        st.settings.in_use = false;
+        assert_eq!(geom(&media, &st).w, plain);
+    }
+
+    #[test]
+    fn a_meeting_with_a_link_makes_room_for_join() {
+        let mut st = AppState::new(Settings::default(), Store::default());
+        st.addons.insert(dyna_core::addons::OUTLOOK_AGENDA.id, dyna_core::addons::Status::Ready);
+        let now = dyna_core::agenda::local_secs(&st.local);
+        let m = |join: &str| dyna_core::agenda::Meeting {
+            subject: "Weekly".into(),
+            location: String::new(),
+            join: join.into(),
+            start: now + 300,
+            end: now + 1800,
+            all_day: false,
+        };
+        st.agenda.meetings = vec![m("")];
+        let meeting = Mode::Activity(Activity::Meeting);
+        assert_eq!(resting_mode(&st), meeting);
+        assert_eq!((geom(&meeting, &st).w, meeting_join(&st)), (MEETING_W, None));
+        st.agenda.meetings = vec![m("https://teams.microsoft.com/l/meetup-join/x")];
+        assert_eq!(geom(&meeting, &st).w, MEETING_JOIN_W);
+        assert!(meeting_join(&st).is_some());
+    }
 
     #[test]
     fn stepped_aside_what_rests_waits_and_what_happens_still_shows() {

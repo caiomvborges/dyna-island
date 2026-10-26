@@ -17,10 +17,18 @@ Uma ilha no topo da tela do Windows, como a Dynamic Island do celular: mostra o 
 | **Clipboard** | Histórico do que foi copiado (só texto, só na memória) |
 | **Today** | Data, mês e um resumo do PC |
 | **System** | CPU, GPU, memória, discos, rede, bateria, energia e FPS sobre jogos. O **sino** ao lado de um processo avisa na ilha quando ele terminar (com o código de saída se falhar) |
-| **Agenda** | Reuniões de hoje e amanhã e a próxima contando na ilha 15 min antes (add-on **Outlook agenda**, desligado por padrão). Lê o link ICS que o Outlook publica: no Outlook.com, Configurações › Calendário › Calendários compartilhados › Publicar um calendário, copie o link ICS e clique em **Paste link**. Só aceita `https` dos endereços do Outlook, não segue redirecionamentos e lê a cada 5 min (só com o PC em uso) |
+| **Agenda** | Reuniões de hoje e amanhã e a próxima contando na ilha 15 min antes, com o botão **Join** quando o convite traz o link do Teams, Zoom ou Google Meet (add-on **Outlook agenda**, desligado por padrão). Lê o link ICS que o Outlook publica: no Outlook.com, Configurações › Calendário › Calendários compartilhados › Publicar um calendário, copie o link ICS e clique em **Paste link**. Só aceita `https` dos endereços do Outlook, não segue redirecionamentos e lê a cada 5 min (só com o PC em uso) |
 | **Dock** | Programas e atalhos escolhidos, abertos com um clique (botão **Add** escolhe o arquivo) |
 | **Script** | Teleprompter sob a webcam, escondido de compartilhamentos de tela (add-on, desligado por padrão) |
 | **Add-ons** | Liga e desliga o Script reader e o Outlook agenda |
+
+Com a ilha fechada aparecem também, por um instante:
+
+- **Volume e brilho** ao mudar (o brilho é o da tela do notebook).
+- **Carregador:** plugado (a bateria enche na animação), tirado e carga completa; **bateria baixa** em 20, 10 e 5%.
+- **Câmera e microfone em uso:** o aviso diz qual app começou a usar. Enquanto durar, um ponto fica na ponta da ilha: verde para a câmera, laranja só para o microfone. Vem dos registros de privacidade do próprio Windows, sem ficar consultando.
+
+Cada um desliga no `settings.json` (`hud_volume`, `hud_brightness`, `hud_power`, `hud_bluetooth`, `in_use`).
 
 A engrenagem no cabeçalho abre o **Settings** (tema; aparência em repouso; sons; tela cheia; iniciar com o Windows).
 

@@ -52,6 +52,28 @@ pub fn open(target: &str) {
     });
 }
 
+/// Join an online meeting: open its link (`https` to Teams, Zoom or Google
+/// Meet only, as `agenda::is_join_link` checks) with whatever Windows hands
+/// it to, the meeting app or the browser. Only the host is logged: the rest
+/// of a join link can let someone in.
+pub fn open_join(link: &str) {
+    if !dyna_core::agenda::is_join_link(link) {
+        crate::pwarn!("join refused: not a meeting link");
+        return;
+    }
+    let link = link.to_string();
+    run("join", move || {
+        let host = link[8..].split(['/', '?', '#']).next().unwrap_or("").to_ascii_lowercase();
+        let t = HSTRING::from(link.as_str());
+        let r = unsafe { ShellExecuteW(None, w!("open"), &t, None, None, SW_SHOWNORMAL) };
+        if (r.0 as isize) <= 32 {
+            crate::pwarn!("join failed ({}): {host}", r.0 as isize);
+        } else {
+            crate::pinfo!("join: opened a meeting on {host}");
+        }
+    });
+}
+
 /// Open Settings > Apps > Startup (asynchronously). The Store build sends
 /// people there when they turned Dyna Island's startup task off in Windows, the only
 /// place it can be turned back on.

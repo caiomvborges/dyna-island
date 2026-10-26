@@ -381,6 +381,8 @@ struct Event {
     uid: String,
     summary: String,
     location: String,
+    /// The online meeting's join link, when the event names one.
+    join: String,
     start: Option<Time>,
     end: Option<Time>,
     duration: Option<i64>,
@@ -402,6 +404,8 @@ pub struct Calendar {
 pub struct Occurrence {
     pub summary: String,
     pub location: String,
+    /// The online meeting's join link (`agenda::join_link`), or empty.
+    pub join: String,
     pub start: Instant,
     pub end: Instant,
     pub all_day: bool,
@@ -513,7 +517,22 @@ pub fn parse(text: &str) -> Calendar {
                     match p.name.as_str() {
                         "UID" => e.uid = value.to_string(),
                         "SUMMARY" => e.summary = unescape(&p.value),
-                        "LOCATION" => e.location = unescape(&p.value),
+                        "LOCATION" => {
+                            e.location = unescape(&p.value);
+                            if e.join.is_empty() {
+                                e.join = crate::agenda::join_link(&e.location).unwrap_or_default();
+                            }
+                        }
+                        // Outlook names a Teams meeting's link outright; else
+                        // it is in the description or the event's own URL.
+                        "X-MICROSOFT-SKYPETEAMSMEETINGURL" => {
+                            if let Some(l) = crate::agenda::join_link(&unescape(&p.value)) {
+                                e.join = l;
+                            }
+                        }
+                        "DESCRIPTION" | "URL" | "X-ALT-DESC" if e.join.is_empty() => {
+                            e.join = crate::agenda::join_link(&unescape(&p.value)).unwrap_or_default();
+                        }
                         "DTSTART" => e.start = p.time(),
                         "DTEND" => e.end = p.time(),
                         "DURATION" => e.duration = parse_duration(value),
@@ -612,7 +631,7 @@ impl Calendar {
             let end = Calendar::at_wall(start, start.wall() + len);
             let (s, en) = (self.instant(start), self.instant(&end));
             if s.rough() < to && en.rough() > from {
-                out.push(Occurrence { summary: e.summary.clone(), location: e.location.clone(), start: s, end: en, all_day });
+                out.push(Occurrence { summary: e.summary.clone(), location: e.location.clone(), join: e.join.clone(), start: s, end: en, all_day });
             }
         };
         for e in self.events.iter().filter(|e| e.recurrence_id.is_none()) {
@@ -695,6 +714,7 @@ BEGIN:VEVENT\r\n\
 UID:weekly-1\r\n\
 SUMMARY;LANGUAGE=pt-BR:Weekly sell-out\\, review\r\n\
 LOCATION:Microsoft Teams\r\n\
+DESCRIPTION:Reunião do Microsoft Teams\\nIngressar: <https://teams.microsoft.com/l/meetup-join/19%3am\r\n eeting_x%40thread.v2/0> Saiba mais <https://aka.ms/JoinTeamsMeeting>\\n\r\n\
 DTSTART;TZID=E. South America Standard Time:20260105T093000\r\n\
 DTEND;TZID=E. South America Standard Time:20260105T100000\r\n\
 RRULE:FREQ=WEEKLY;UNTIL=20261231T120000Z;INTERVAL=1;BYDAY=MO,WE;WKST=SU\r\n\
@@ -710,6 +730,7 @@ END:VEVENT\r\n\
 BEGIN:VEVENT\r\n\
 UID:berlin\r\n\
 SUMMARY:Call with Berlin,\r\n  long title\r\n\
+URL:https://us02web.zoom.us/j/555\r\n\
 DTSTART;TZID=Central Europe Standard Time:20261025T150000\r\n\
 DURATION:PT45M\r\n\
 END:VEVENT\r\n\
@@ -772,6 +793,10 @@ END:VCALENDAR\r\n";
         assert!(got[3].all_day && got[3].end == Instant::LocalWall(utc(2026, 11, 3, 0, 0)));
         assert_eq!(got[1].location, "");
         assert_eq!(got[4].location, "Microsoft Teams");
+        // Join links: Teams' from a folded description, Zoom's from the URL.
+        assert_eq!(got[4].join, "https://teams.microsoft.com/l/meetup-join/19%3ameeting_x%40thread.v2/0");
+        assert_eq!(got[0].join, "https://us02web.zoom.us/j/555");
+        assert_eq!(got[2].join, "");
     }
 
     #[test]

@@ -84,6 +84,11 @@ pub struct Settings {
     pub hud_volume: bool,
     pub hud_power: bool,
     pub hud_bluetooth: bool,
+    /// A pop-up when the screen's brightness changes (laptop screens).
+    pub hud_brightness: bool,
+    /// The camera or microphone in use: a pop-up when an app starts, and a
+    /// dot on the closed island while it lasts (green camera, orange mic).
+    pub in_use: bool,
     pub clipboard_history: bool,
     pub sounds: bool,
     /// Page shown first when expanding ("media", "focus", "tasks", "clipboard", "today", …).
@@ -130,6 +135,8 @@ impl Default for Settings {
             hud_volume: true,
             hud_power: true,
             hud_bluetooth: true,
+            hud_brightness: true,
+            in_use: true,
             clipboard_history: true,
             sounds: true,
             start_page: "media".into(),

@@ -64,6 +64,10 @@ pub enum AppEvent {
     /// Master volume changed (0..=1).
     Volume { level: f32, muted: bool },
     Power(PowerState),
+    /// The screen's brightness changed (0..=100; laptop screens).
+    Brightness(u32),
+    /// The apps using the camera and the microphone changed (`services::inuse`).
+    InUse(dyna_core::inuse::InUse),
     Bluetooth { name: String, connected: bool, battery: Option<u8>, audio: bool },
     /// A full-screen app took over (or left) the island's monitor. `true` is
     /// sent again when another window comes to the foreground while the

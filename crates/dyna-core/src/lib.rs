@@ -16,6 +16,7 @@ pub mod geom;
 pub mod glass;
 pub mod hdr;
 pub mod ics;
+pub mod inuse;
 pub mod look;
 pub mod notes;
 pub mod nowplaying;

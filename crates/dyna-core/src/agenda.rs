@@ -18,10 +18,56 @@ pub const NOW_S: i64 = 5 * 60;
 pub struct Meeting {
     pub subject: String,
     pub location: String,
+    /// The online meeting's join link (Teams, Zoom, Meet), checked by
+    /// [`join_link`]; empty when the calendar gives none.
+    pub join: String,
     /// Local wall-clock seconds (see the module docs).
     pub start: i64,
     pub end: i64,
     pub all_day: bool,
+}
+
+/// Where a meeting may be joined: the only links the island opens.
+const JOIN_HOSTS: [&str; 3] = ["teams.microsoft.com", "teams.live.com", "meet.google.com"];
+/// Zoom gives each company its own host under this one.
+const ZOOM: &str = "zoom.us";
+/// A real join link is far shorter.
+const MAX_JOIN_LEN: usize = 2048;
+
+/// The first online meeting's join link in `text` (a calendar's description
+/// or location): `https` to Teams, Zoom or Google Meet only, so a click on
+/// the island never opens anything else.
+pub fn join_link(text: &str) -> Option<String> {
+    let mut rest = text;
+    while let Some(i) = find_ci(rest, "https://") {
+        let tail = &rest[i..];
+        let end = tail.find(|c: char| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '`')).unwrap_or(tail.len());
+        let link = tail[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if is_join_link(link) {
+            return Some(link.to_string());
+        }
+        rest = &tail["https://".len()..];
+    }
+    None
+}
+
+/// `link` is an `https` link to a meeting on Teams, Zoom or Google Meet.
+pub fn is_join_link(link: &str) -> bool {
+    if link.len() > MAX_JOIN_LEN || link.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    let Some(rest) = link.get(..8).filter(|p| p.eq_ignore_ascii_case("https://")).map(|_| &link[8..]) else { return false };
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (host, path) = (rest[..host_end].to_ascii_lowercase(), &rest[host_end..]);
+    // No user name or port tricks ("teams.microsoft.com@elsewhere").
+    if host.is_empty() || host.contains(['@', ':']) || path.len() <= 1 {
+        return false;
+    }
+    JOIN_HOSTS.contains(&host.as_str()) || host == ZOOM || host.strip_suffix(ZOOM).is_some_and(|h| h.ends_with('.') && h.len() > 1)
+}
+
+fn find_ci(hay: &str, needle: &str) -> Option<usize> {
+    hay.as_bytes().windows(needle.len()).position(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// The island's local time as local wall-clock seconds.
@@ -100,7 +146,7 @@ mod tests {
     }
 
     fn meeting(subject: &str, start: i64, mins: i64) -> Meeting {
-        Meeting { subject: subject.into(), location: String::new(), start, end: start + mins * 60, all_day: false }
+        Meeting { subject: subject.into(), location: String::new(), join: String::new(), start, end: start + mins * 60, all_day: false }
     }
 
     #[test]
@@ -137,5 +183,28 @@ mod tests {
         let (today, next_day) = by_day(&list, at(8, 0));
         assert_eq!(today.iter().map(|m| m.subject.as_str()).collect::<Vec<_>>(), ["Today", "Holiday"]);
         assert_eq!(next_day.iter().map(|m| m.subject.as_str()).collect::<Vec<_>>(), ["Tomorrow"]);
+    }
+
+    #[test]
+    fn join_links_only_to_meeting_hosts() {
+        let teams = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7b%22Tid%22%7d";
+        let desc = format!("Join Microsoft Teams Meeting <{teams}> Learn more <https://aka.ms/JoinTeamsMeeting>");
+        assert_eq!(join_link(&desc).as_deref(), Some(teams));
+        assert_eq!(join_link("Learn more https://aka.ms/JoinTeamsMeeting, then https://us02web.zoom.us/j/123?pwd=x.").as_deref(), Some("https://us02web.zoom.us/j/123?pwd=x"));
+        assert_eq!(join_link("HTTPS://meet.google.com/abc-defg-hij").as_deref(), Some("HTTPS://meet.google.com/abc-defg-hij"));
+        assert_eq!(join_link("Room 4, no link"), None);
+        for bad in [
+            "http://teams.microsoft.com/l/x",
+            "https://teams.microsoft.com.evil.com/l/x",
+            "https://teams.microsoft.com@evil.com/l/x",
+            "https://teams.microsoft.com:8443/l/x",
+            "https://notzoom.us/j/1",
+            "https://teams.microsoft.com/",
+            "https://evil.com/?u=https:/teams.microsoft.com",
+        ] {
+            assert!(!is_join_link(bad), "{bad}");
+        }
+        assert!(is_join_link("https://zoom.us/j/1"));
+        assert!(is_join_link("https://teams.live.com/meet/9381"));
     }
 }

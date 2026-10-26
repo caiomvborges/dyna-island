@@ -1,4 +1,5 @@
-//! The pop-ups (`Mode::Hud`): volume, charging, low battery and Bluetooth.
+//! The pop-ups (`Mode::Hud`): volume, brightness, charging, low battery,
+//! Bluetooth and the camera or mic in use.
 //!
 //! Each is a capsule of the resting pill's height: a glyph in the left end,
 //! a label (or the volume's level bar) after it and the value or the battery
@@ -58,9 +59,10 @@ const MID_GAP: f32 = 16.0;
 
 pub fn geom(t: HudTag, st: &AppState) -> Option<Geom> {
     let w = match t {
-        HudTag::Volume => VOLUME_W,
+        HudTag::Volume | HudTag::Brightness => VOLUME_W,
         HudTag::Charging | HudTag::LowBattery => BATTERY_W,
         HudTag::Bluetooth => bluetooth_w(st),
+        HudTag::InUse => in_use_w(st),
     };
     Some(Geom::new(w, H, H / 2.0))
 }
@@ -70,11 +72,22 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, _t: HudTag, body: Rect) -> bool {
     let Some(hud) = st.hud.clone() else { return true };
     match hud.kind {
         HudKind::Volume { level, muted } => volume(ui, st, body, level, muted),
-        HudKind::Charging { percent, plugged } => {
-            let (icon, color, label) = if plugged { (Icon::Bolt, palette::GREEN, "Charging") } else { (Icon::Battery, palette::TEXT, "On battery") };
-            power(ui, body, icon, color, label, percent, plugged);
+        HudKind::Brightness { level } => {
+            let cy = body.center().y;
+            ui.c.icon(Icon::Sun, Rect::new(body.x + GLYPH_X, cy - GLYPH / 2.0, GLYPH, GLYPH), palette::TEXT);
+            level_bar(ui, st, body, level, &format!("{}%", (level * 100.0).round() as i32));
         }
-        HudKind::LowBattery { percent } => power(ui, body, Icon::Battery, palette::RED, "Low battery", percent, false),
+        HudKind::InUse(now) => in_use(ui, body, &now),
+        HudKind::Charging { percent, plugged } => {
+            let (icon, color, label) = match (plugged, percent) {
+                (true, 100) => (Icon::Bolt, palette::GREEN, "Fully charged"),
+                (true, _) => (Icon::Bolt, palette::GREEN, "Charging"),
+                _ => (Icon::Battery, palette::TEXT, "On battery"),
+            };
+            let fill = crate::activities::charge_fill(ui, st, percent);
+            power(ui, body, icon, color, label, percent, fill, plugged);
+        }
+        HudKind::LowBattery { percent } => power(ui, body, Icon::Battery, palette::RED, "Low battery", percent, percent, false),
         HudKind::Bluetooth { name, connected, battery, audio } => bluetooth(ui, st, body, &name, connected, battery, audio),
     }
     true
@@ -105,22 +118,20 @@ fn volume(ui: &mut Ui, st: &mut AppState, body: Rect, level: f32, muted: bool) {
         Some(2)
     };
     speaker(ui, Rect::new(body.x + GLYPH_X, cy - GLYPH / 2.0, GLYPH, GLYPH), waves, palette::TEXT);
+    let value = if muted { "Muted".to_string() } else { format!("{}%", (level * 100.0).round() as i32) };
+    level_bar(ui, st, body, if muted { 0.0 } else { level }, &value);
+}
 
+/// The level bar after the glyph, gliding to `target` (Classic's glide),
+/// and `value` at the right.
+fn level_bar(ui: &mut Ui, st: &mut AppState, body: Rect, target: f32, value: &str) {
+    let cy = body.center().y;
     let vs = value_style();
     // The bar keeps one length for "100%" and "Muted".
     let slot = ui.c.measure("100%", &vs, 200.0).0.max(ui.c.measure("Muted", &vs, 200.0).0);
     let right = body.right() - VALUE_INSET;
     let (x0, x1) = (body.x + TRACK_X, right - slot - VALUE_GAP);
-    // The bar glides to new levels; the number is exact immediately (Classic's glide).
-    let target = if muted { 0.0 } else { level };
-    let cur = st.ui.hud_level;
-    let shown = if (cur - target).abs() > 0.002 {
-        ui.request_anim();
-        cur + (target - cur) * 0.32
-    } else {
-        target
-    };
-    st.ui.hud_level = shown;
+    let shown = crate::activities::glide_level(ui, st, target);
     // While the pill is still growing there may be no room for it yet.
     if x1 - x0 >= TRACK_H {
         let bar = Rect::new(x0, snap(ui, cy - TRACK_H / 2.0), x1 - x0, TRACK_H);
@@ -129,8 +140,29 @@ fn volume(ui: &mut Ui, st: &mut AppState, body: Rect, level: f32, muted: bool) {
             ui.c.fill_rrect(Rect::new(bar.x, bar.y, (bar.w * shown).max(TRACK_H), bar.h), TRACK_H / 2.0, FILL);
         }
     }
-    let value = if muted { "Muted".to_string() } else { format!("{}%", (level * 100.0).round() as i32) };
-    ui.c.text(&value, Rect::new(right - slot - 4.0, body.y, slot + 4.0, body.h), &vs.right());
+    ui.c.text(value, Rect::new(right - slot - 4.0, body.y, slot + 4.0, body.h), &vs.right());
+}
+
+/// The camera or mic in use: its glyph in the device's colour, what is in
+/// use and, dimmer, by which apps, on one line.
+fn in_use(ui: &mut Ui, body: Rect, now: &dyna_core::inuse::InUse) {
+    let cy = body.center().y;
+    let (col, icon) = if now.camera.is_empty() { (palette::ORANGE, Icon::Mic) } else { (palette::GREEN, Icon::Video) };
+    ui.c.icon(icon, Rect::new(body.x + GLYPH_X, cy - GLYPH / 2.0, GLYPH, GLYPH), col);
+    let (ls, ds) = (label_style(), TextStyle::body().color(palette::TEXT_DIM));
+    let x = body.x + TEXT_X;
+    let room = body.w - TEXT_X - BATTERY_INSET;
+    let w = ui.c.measure(now.label(), &ls, 1000.0).0;
+    let lw = text_upto(ui, now.label(), w, x, body, room, &ls);
+    let apps = now.apps();
+    let aw = ui.c.measure(&apps, &ds, 10_000.0).0;
+    text_upto(ui, &apps, aw, x + lw + SEP, body, room - lw - SEP, &ds);
+}
+
+/// The camera-or-mic pop-up's width: the glyph, what is in use and the apps.
+fn in_use_w(st: &AppState) -> f32 {
+    let Some(HudKind::InUse(now)) = st.hud.as_ref().map(|h| &h.kind) else { return BT_MIN_W };
+    (TEXT_X + approx_w(now.label()) + SEP + approx_w(&now.apps()) + BATTERY_INSET).clamp(BT_MIN_W, BT_MAX_W).round()
 }
 
 /// A filled speaker in a 16-unit box with `waves` sound waves, or a cross
@@ -162,13 +194,14 @@ fn speaker(ui: &mut Ui, r: Rect, waves: Option<u8>, color: Color) {
 }
 
 /// Charging, on battery or low: the glyph, the label, and the battery as
-/// the resting pill shows it.
-fn power(ui: &mut Ui, body: Rect, icon: Icon, color: Color, label: &str, percent: u8, charging: bool) {
+/// the resting pill shows it, drawn `fill` full.
+#[allow(clippy::too_many_arguments)]
+fn power(ui: &mut Ui, body: Rect, icon: Icon, color: Color, label: &str, percent: u8, fill: u8, charging: bool) {
     let cy = body.center().y;
     // The battery outline is a flat glyph: a bigger box gives it the bolt's weight.
     let g = if icon == Icon::Battery { BATTERY_ICON } else { GLYPH };
     ui.c.icon(icon, Rect::from_center(Point::new(body.x + GLYPH_X + GLYPH / 2.0, cy), g, g), color);
-    battery_cluster(ui, body.right() - BATTERY_INSET, cy, percent, charging);
+    battery_cluster(ui, body.right() - BATTERY_INSET, cy, percent, fill, charging);
     // The label's room at the pill's own width, so it doesn't re-ellipsize while the pill grows.
     let room = body.w.max(BATTERY_W) - TEXT_X - MID_GAP - CLUSTER_W - BATTERY_INSET;
     ui.c.text(label, Rect::new(body.x + TEXT_X, body.y, room, body.h), &label_style());
@@ -194,7 +227,7 @@ fn bluetooth(ui: &mut Ui, st: &AppState, body: Rect, name: &str, connected: bool
     match battery {
         // The battery holds the right end; the state follows the name.
         Some(b) => {
-            battery_cluster(ui, body.right() - BATTERY_INSET, cy, b, false);
+            battery_cluster(ui, body.right() - BATTERY_INSET, cy, b, b, false);
             let pw = ui.c.measure(&format!("{b}%"), &value_style(), 100.0).0;
             let sep = if nw > 0.0 { SEP } else { 0.0 };
             let room = full - TEXT_X - (BATTERY_INSET + BATTERY_GLYPH_W + PCT_GAP + pw + MID_GAP) - sep - sw;
@@ -263,10 +296,10 @@ fn approx_w(s: &str) -> f32 {
 }
 
 /// The battery as the resting pill shows it: the percentage, then the drawn
-/// battery, its right end at `right`, centred on `cy`.
-fn battery_cluster(ui: &mut Ui, right: f32, cy: f32, percent: u8, charging: bool) {
+/// battery (`fill` full), its right end at `right`, centred on `cy`.
+fn battery_cluster(ui: &mut Ui, right: f32, cy: f32, percent: u8, fill: u8, charging: bool) {
     let gx = right - BATTERY_GLYPH_W;
-    battery(ui, Rect::new(gx, cy - BODY_H / 2.0, BATTERY_GLYPH_W, BODY_H), percent, charging);
+    battery(ui, Rect::new(gx, cy - BODY_H / 2.0, BATTERY_GLYPH_W, BODY_H), fill, charging);
     // Right-aligned in a box wider than its slot, so a wider font never ellipsizes "100%".
     let (tr, bw) = (gx - PCT_GAP, PCT_SLOT + 12.0);
     ui.c.text(&format!("{percent}%"), Rect::new(tr - bw, cy - 10.0, bw, 20.0), &value_style().right());
@@ -293,7 +326,7 @@ mod tests {
     #[test]
     fn every_pop_up_is_a_capsule_as_tall_as_the_resting_pill() {
         let st = with_device("Sound Buds", Some(80));
-        for t in [HudTag::Volume, HudTag::Charging, HudTag::LowBattery, HudTag::Bluetooth] {
+        for t in [HudTag::Volume, HudTag::Brightness, HudTag::Charging, HudTag::LowBattery, HudTag::Bluetooth, HudTag::InUse] {
             let g = geom(t, &st).unwrap();
             assert_eq!((g.h, g.r), (32.0, 16.0), "{t:?}");
         }

@@ -4,7 +4,9 @@
 //!
 //! With no link yet, the page says where Outlook.com gives one and offers
 //! Paste link (`Command::AgendaPasteLink`); with one, its footer has Remove
-//! link. The page only shows `st.agenda`; the app reads the link
+//! link. The meeting under way or next has Join when the calendar gives its
+//! online meeting's link (`Command::JoinMeeting`). The page only shows
+//! `st.agenda`; the app reads the link
 //! (`services::agenda`) when it is set, every few minutes while someone is at
 //! the PC, and when this page opens.
 
@@ -12,7 +14,7 @@ use crate::commands::Command;
 use crate::gfx::{TextStyle, Weight};
 use crate::icons::Icon;
 use crate::state::{AgendaStatus, AppState};
-use crate::ui::{wid, PillStyle, PILL_REGULAR};
+use crate::ui::{wid, PillStyle, PILL_REGULAR, PILL_SMALL};
 use dyna_core::agenda::{by_day, fmt_time, fmt_until, local_secs, next, Meeting};
 use dyna_core::geom::{palette, Point, Rect};
 
@@ -76,7 +78,9 @@ pub fn draw(ui: &mut crate::ui::Ui, st: &mut AppState, area: Rect) {
             break;
         }
         let is_next = next_one.as_ref() == Some(*m);
-        row(ui, Rect::new(body.x, y, body.w, ROW_H), m, use_24h, if is_next { Some((accent, now)) } else { None });
+        if let Some(join) = row(ui, Rect::new(body.x, y, body.w, ROW_H), m, use_24h, if is_next { Some((accent, now)) } else { None }) {
+            st.cmd(Command::JoinMeeting(join));
+        }
         y += ROW_H;
     }
     if !tomorrow.is_empty() && fits(y + 6.0, LABEL_H + ROW_H) {
@@ -143,8 +147,9 @@ fn label(ui: &mut crate::ui::Ui, r: Rect, text: &str) {
 }
 
 /// One meeting: its times on the left, the subject over the place. `next`:
-/// the accent and the island's clock, for the one under way or next.
-fn row(ui: &mut crate::ui::Ui, r: Rect, m: &Meeting, use_24h: bool, next: Option<(dyna_core::geom::Color, i64)>) {
+/// the accent and the island's clock, for the one under way or next, which
+/// also gets Join when it has a link. Returns the link when Join was clicked.
+fn row(ui: &mut crate::ui::Ui, r: Rect, m: &Meeting, use_24h: bool, next: Option<(dyna_core::geom::Color, i64)>) -> Option<String> {
     let times = if m.all_day { "All day".to_string() } else { format!("{}\u{2013}{}", fmt_time(m.start, use_24h), fmt_time(m.end, use_24h)) };
     let time_st = TextStyle::footnote().tabular().color(if next.is_some() { palette::TEXT } else { palette::TEXT_DIM });
     if let Some((accent, _)) = next {
@@ -153,11 +158,20 @@ fn row(ui: &mut crate::ui::Ui, r: Rect, m: &Meeting, use_24h: bool, next: Option
     ui.c.text(&times, Rect::new(r.x + 12.0, r.y, TIME_W, r.h), &time_st);
     let x = r.x + 12.0 + TIME_W;
     let mut right = r.right();
+    let mut joined = None;
     if let Some((accent, now)) = next {
+        if !m.join.is_empty() {
+            let w = ui.pill_width("Join", true, true);
+            let p = Rect::new(right - w, r.center().y - PILL_SMALL / 2.0, w, PILL_SMALL);
+            if ui.pill(wid("agenda.join"), p, "Join", Some(Icon::Video), PillStyle::Primary(accent)).clicked {
+                joined = Some(m.join.clone());
+            }
+            right = p.x - 10.0;
+        }
         let until = fmt_until(m.start - now);
         let st = TextStyle::footnote().weight(Weight::Semibold).color(accent).right();
         let w = ui.c.measure(&until, &st, 200.0).0.ceil();
-        ui.c.text(&until, Rect::new(r.right() - w - 2.0, r.y, w + 2.0, r.h), &st);
+        ui.c.text(&until, Rect::new(right - w - 2.0, r.y, w + 2.0, r.h), &st);
         right -= w + 12.0;
     }
     let w = (right - x).max(0.0);
@@ -168,4 +182,5 @@ fn row(ui: &mut crate::ui::Ui, r: Rect, m: &Meeting, use_24h: bool, next: Option
         ui.c.text(subject, Rect::new(x, r.y + 1.0, w, 17.0), &TextStyle::body());
         ui.c.text(&m.location, Rect::new(x, r.y + 17.0, w, 15.0), &TextStyle::caption().color(palette::TEXT_DIM));
     }
+    joined
 }

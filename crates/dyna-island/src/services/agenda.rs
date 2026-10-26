@@ -107,7 +107,7 @@ fn read(ask: &Ask) -> AgendaRead {
         .into_iter()
         .filter_map(|o| {
             let (start, end) = (local_wall(o.start)?, local_wall(o.end)?);
-            (start < last && end > first).then(|| Meeting { subject: o.summary, location: o.location, start, end, all_day: o.all_day })
+            (start < last && end > first).then(|| Meeting { subject: o.summary, location: o.location, join: o.join, start, end, all_day: o.all_day })
         })
         .collect();
     crate::pinfo!("agenda: {} meetings from {host}", meetings.len());

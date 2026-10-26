@@ -3,7 +3,10 @@
 Dyna Island, a local, Windows-only "living notch" for Windows
 10/11. A black island hangs from the top-centre of the screen, shows live
 activities while collapsed (music, the focus timer, pop-ups, notices, the
-readout over games, the next meeting) and expands on hover into pages: Music,
+readout over games, the next meeting, with Join when the invitation has
+a Teams, Zoom or Meet link), pop-ups (volume, brightness, charging, low
+battery, Bluetooth, the camera or mic in use, with a dot at the island's
+right end while it lasts) and expands on hover into pages: Music,
 Focus, Tasks, Notes, Clipboard, Today, System, Agenda (an add-on), Dock,
 Script (an add-on) and Add-ons, with Settings behind the gear.
 
@@ -48,6 +51,7 @@ the rename still runs.
  imaging (icons)    ─┤
  sysmon / frames    ─┤ only while the System page or the games readout needs them
  watch (per process)─┤ one blocked thread per bell, until that process ends
+ inuse (camera, mic) ─┤ one blocked thread on Windows' privacy records (registry change events)
  agenda (HTTPS)     ─┘ while the agenda add-on has a link: a read every 5 min / on the Agenda tab
  frame clock thread ── WM_APP_FRAME (display vblank, only while animating)
 ```
@@ -94,7 +98,10 @@ the rename still runs.
   It never takes focus on click; text fields temporarily drop NOACTIVATE
   (`Command::FocusText`) and give focus back afterwards.
 * **Helper window** (hidden): tray icon, AppBar registration (full-screen
-  notifications), `WM_POWERBROADCAST`, `WM_CLIPBOARDUPDATE`.
+  notifications), `WM_POWERBROADCAST` (power, display state and the
+  screen's brightness: a change within `BRIGHTNESS_QUIET_S` of the display
+  coming on or the charger moving is Windows' own and shows no pop-up),
+  `WM_CLIPBOARDUPDATE`.
 * **Modal work** (the tray menu, the Dock's Open dialog) runs as
   `app::Deferred` after the window message that asked for it, never while the
   `App` is borrowed: those loops pump messages of their own.
@@ -166,7 +173,11 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
   link. `App::sync_agenda` starts or stops `services::agenda` with the add-on
   and the link, and `App::ask_agenda` reads when the link is set, each
   `AGENDA_EVERY_S` from the minute timer while someone is at the PC, and as
-  the page opens. Offline, the meetings last read stay. `Activity::Meeting` takes the closed
+  the page opens. Offline, the meetings last read stay. A meeting's join link
+  (`dyna_core::agenda::join_link`: `https` to Teams, Zoom or Google Meet
+  only, from the event's Teams URL, description, location or URL) gives
+  Join on the closed island and on the page; `shell::open_join` checks it
+  again and logs only its host. `Activity::Meeting` takes the closed
   island from `agenda::LEAD_S` before the next meeting to `NOW_S` after it
   starts (`AppState::meeting_countdown`), ahead of music and the timer.
 * Dock (`pages/dock.rs`): tiles for `store.dock` (`dyna_core::dock`, up to
@@ -210,7 +221,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect);  // draw + handle input
 | `gfx.rs`, `glass.rs`, `icons.rs`, `ui.rs`, `island.rs`, `window.rs`, `png.rs` | rendering/UI foundation |
 | `state.rs`, `events.rs`, `commands.rs` | shared contracts |
 | `pages/*.rs` | expanded pages: `media` (Music), `focus`, `tasks`, `notes`, `clipboard`, `today`, `system`, `agenda`, `dock`, `script`, `addons`, `settings` |
-| `services/*.rs` | watch (the System page's bell: waits for a process to end), agenda (the agenda add-on: a WinHTTP GET of the pasted link, the parsed meetings moved to the PC's clock with `SystemTimeToTzSpecificLocalTime`), media (Windows' media controls; Apple Music's own progress slider and back button through UI Automation in `applemusic_ui`), audio, bluetooth, fullscreen (AppBar and top windows), clipboard, imaging (WIC decoding, shell thumbnails and app icons on one worker thread, for the System page and the Dock), backdrop (the Glass theme's screen copy), power, sound, sysstats (Today's vitals), sysmon (the System page's readings: each second while the page is open or a game's readout shows, a light reading a second for the kept minute while it's closed; all of it rests while nobody is at the PC, the kept minute also on battery saver; on a desktop with the page open it also loads NVML for an NVIDIA card's watts and reads a power supply that reports over USB), psu (that power supply over HID, read with requests only), frames (Show over games' frame count: a real-time event tracing session of the game's Present calls, only while the readout shows; the one-time OK is `dyna-island.exe --allow-fps <SID>`, run elevated) |
+| `services/*.rs` | inuse (the camera and microphone in use: one thread blocked on change events of `CapabilityAccessManager\ConsentStore`; an app whose stop time is 0 uses the device now; names in `dyna_core::inuse`), watch (the System page's bell: waits for a process to end), agenda (the agenda add-on: a WinHTTP GET of the pasted link, the parsed meetings moved to the PC's clock with `SystemTimeToTzSpecificLocalTime`), media (Windows' media controls; Apple Music's own progress slider and back button through UI Automation in `applemusic_ui`), audio, bluetooth, fullscreen (AppBar and top windows), clipboard, imaging (WIC decoding, shell thumbnails and app icons on one worker thread, for the System page and the Dock), backdrop (the Glass theme's screen copy), power, sound, sysstats (Today's vitals), sysmon (the System page's readings: each second while the page is open or a game's readout shows, a light reading a second for the kept minute while it's closed; all of it rests while nobody is at the PC, the kept minute also on battery saver; on a desktop with the page open it also loads NVML for an NVIDIA card's watts and reads a power supply that reports over USB), psu (that power supply over HID, read with requests only), frames (Show over games' frame count: a real-time event tracing session of the game's Present calls, only while the readout shows; the one-time OK is `dyna-island.exe --allow-fps <SID>`, run elevated) |
 | `dragdrop.rs`, `picker.rs`, `shell.rs`, `tray.rs`, `autostart.rs`, `activate.rs` | OS integration: drops onto the island, the Open dialog, opening files and apps (validated local paths only), the tray menu, Start with Windows, and bringing the playing app forward (the Music page's player name: a Store app through `IApplicationActivationManager`, a desktop app's main window, preferring the one titled with the song) |
 | `version.rs` | which build this is, for the tray's greyed About line |
 | `selftest.rs` | `dyna-island.exe --selftest <dir>` scripted screenshots and checks |

@@ -1682,6 +1682,8 @@ fn sample_agenda(st: &AppState, closed: bool) -> crate::state::AgendaState {
     let m = |subject: &str, location: &str, start: i64, mins: i64, all_day: bool| Meeting {
         subject: subject.into(),
         location: location.into(),
+        // The Teams meetings carry a join link, so Join shows.
+        join: if location == "Microsoft Teams" { "https://teams.microsoft.com/l/meetup-join/19%3ameeting_selftest%40thread.v2/0".into() } else { String::new() },
         start,
         end: start + mins * 60,
         all_day,

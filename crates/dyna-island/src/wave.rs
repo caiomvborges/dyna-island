@@ -87,11 +87,11 @@ const FOAMY: [f32; 5] = [0.3, 0.5, 1.0, 1.4, 1.0];
 
 /// One break, in seconds, and when it reaches each pose: a moment calm,
 /// then it grows, curls, plunges, spends itself in foam and settles.
-pub const CYCLE: f64 = 5.2;
-const KEYS: [(f64, usize); 7] = [(0.0, 0), (0.9, 0), (2.0, 1), (2.8, 2), (3.5, 3), (4.3, 4), (CYCLE, 0)];
+pub const CYCLE: f64 = 3.2;
+const KEYS: [(f64, usize); 7] = [(0.0, 0), (0.4, 0), (1.2, 1), (1.7, 2), (2.15, 3), (2.7, 4), (CYCLE, 0)];
 /// The spray thrown as the lip comes down: when it starts and how long it flies.
-const SPRAY_AT: f64 = 3.0;
-const SPRAY_LIFE: f64 = 1.6;
+const SPRAY_AT: f64 = 1.85;
+const SPRAY_LIFE: f64 = 1.0;
 /// Each drop's push (right, up) in box units.
 const DROPS: [(f32, f32); 5] = [(6.0, 16.0), (12.0, 12.0), (2.0, 20.0), (16.0, 8.0), (9.0, 18.0)];
 
@@ -266,11 +266,11 @@ mod tests {
     fn it_breaks_and_comes_back() {
         // Calm at the start, the print's pose mid-way, calm again at the end.
         assert_eq!(pose_at(0.0).0, CALM);
-        assert_eq!(pose_at(2.8).0, CURLED);
-        assert_eq!(pose_at(3.5).0, PLUNGING);
+        assert_eq!(pose_at(1.7).0, CURLED);
+        assert_eq!(pose_at(2.15).0, PLUNGING);
         assert_eq!(pose_at(CYCLE - 1e-9).0, pose_at(0.0).0);
         // The top is highest while curled, lowest while calm.
-        assert!(pose_at(2.8).0[6].1 < pose_at(0.5).0[6].1);
+        assert!(pose_at(1.7).0[6].1 < pose_at(0.2).0[6].1);
     }
 
     #[test]

@@ -72,11 +72,12 @@ pub enum Shape {
     Pill,
 }
 
-/// The Light theme's amber accent (and the app's accent in that theme), and
-/// the deeper amber its text takes on the cream ground.
-pub const LIGHT_ACCENT: u32 = 0xE8873D;
-const LIGHT_AMBER: Color = Color::hex(LIGHT_ACCENT);
-const LIGHT_AMBER_TEXT: Color = Color::hex(0xB45F22);
+/// The Light theme's blue accent, the Prussian blue of Hokusai's wave (and
+/// the app's accent in that theme), and the deeper blue its text takes on
+/// the cream ground.
+pub const LIGHT_ACCENT: u32 = 0x2E64A6;
+const LIGHT_BLUE: Color = Color::hex(LIGHT_ACCENT);
+const LIGHT_BLUE_TEXT: Color = Color::hex(0x1F4E8C);
 
 pub const CLASSIC: Look = Look {
     ground: Color::black(1.0),
@@ -90,20 +91,21 @@ pub const CLASSIC: Look = Look {
     swaps: &[],
 };
 
-/// Light: warm cream paper, dark brown ink, an amber accent, and Outfit for
+/// Light: warm cream paper, dark brown ink, a Prussian-blue accent (orange
+/// turns blue too), and Outfit for
 /// every Latin letter.
 pub const LIGHT: Look = Look {
     ground: Color::hex(0xFBF4E9),
     ink: Color::hex(0x2C2119),
-    accent: Some(LIGHT_AMBER),
+    accent: Some(LIGHT_BLUE),
     border: Color::rgba(0.50, 0.32, 0.15, 0.20),
     light: true,
     font: Some("Outfit"),
     material: Material::Solid,
     shape: Shape::Notch,
     swaps: &[
-        Swap { from: LIGHT_AMBER, fill: LIGHT_AMBER, text: LIGHT_AMBER_TEXT },
-        Swap { from: palette::ORANGE, fill: LIGHT_AMBER, text: LIGHT_AMBER_TEXT },
+        Swap { from: LIGHT_BLUE, fill: LIGHT_BLUE, text: LIGHT_BLUE_TEXT },
+        Swap { from: palette::ORANGE, fill: LIGHT_BLUE, text: LIGHT_BLUE_TEXT },
         Swap { from: palette::GREEN, fill: Color::hex(0x2DB45A), text: Color::hex(0x1B7F3E) },
         Swap { from: palette::RED, fill: Color::hex(0xE5484D), text: Color::hex(0xC9302C) },
         Swap { from: palette::BLUE, fill: Color::hex(0x2F7CF6), text: Color::hex(0x1A5FCC) },
@@ -249,8 +251,8 @@ mod tests {
     fn light_swaps_accents_and_deepens_them_for_text() {
         let fill = LIGHT.paint(palette::ORANGE);
         let text = LIGHT.paint_text(palette::ORANGE);
-        assert_eq!(fill, LIGHT_AMBER);
-        assert_eq!(text, LIGHT_AMBER_TEXT);
+        assert_eq!(fill, LIGHT_BLUE);
+        assert_eq!(text, LIGHT_BLUE_TEXT);
         assert!(text.luminance() < fill.luminance());
         // Opacity survives the swap.
         assert_eq!(LIGHT.paint(palette::GREEN.mul_alpha(0.5)).a, 0.5);

@@ -385,6 +385,10 @@ fn tab_layout(ui: &mut Ui, x0: f32, tabs: &[PageKind], active: PageKind, label_s
 /// Tabs on the left; pin, date and clock on the right. During a page switch
 /// the tabs re-flow, the selection pill slides and the labels cross-fade.
 /// Returns the hover label to paint once the page is drawn.
+/// The Light theme's wave beside the pin: its width and the gap to the pin.
+const WAVE_W: f32 = 28.0;
+const WAVE_GAP: f32 = 8.0;
+
 pub(crate) fn draw_header(ui: &mut Ui, st: &mut AppState, r: Rect, page: PageKind, tr: Option<PageTransition>) -> Option<Tip> {
     let scale = ui.c.scale().max(0.5);
     let cy = r.center().y;
@@ -460,6 +464,12 @@ pub(crate) fn draw_header(ui: &mut Ui, st: &mut AppState, r: Rect, page: PageKin
 
     let gear_r = Rect::new(snap(left - PIN_GAP - GEAR, scale), cy - GEAR / 2.0, GEAR, GEAR);
     let pin_r = Rect::new(snap(gear_r.x - GEAR_GAP - PIN, scale), cy - PIN / 2.0, PIN, PIN);
+    // Light theme: the wave beside the pin, when the tabs leave room for it.
+    let wave_cx = pin_r.x - WAVE_GAP - WAVE_W / 2.0;
+    if crate::wave::on(st.settings.theme) && wave_cx - WAVE_W / 2.0 > tabs_end + 12.0 {
+        let base = cy + crate::wave::height(WAVE_W) / 2.0;
+        crate::wave::draw(ui.c, wave_cx, base, WAVE_W, r, st.now, false);
+    }
     if pin_r.x > tabs_end + 8.0 {
         let pinned = st.pinned;
         let (icon, color) = if pinned { (Icon::PinFill, st.accent) } else { (Icon::Pin, palette::TEXT_FAINT) };

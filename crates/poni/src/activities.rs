@@ -71,6 +71,13 @@ const BOLT_INSET: f32 = BOLT * 5.0 / 24.0;
 const BOLT_VISIBLE: f32 = BOLT * 14.0 / 24.0;
 /// Gap between the idle clock and its battery badge.
 const BADGE_GAP: f32 = 6.0;
+/// Light theme: the wave's width (DIPs) as the idle "Eyes" look, beside the
+/// clock (with the room it takes there) and in the music pill.
+const WAVE_IDLE_W: f32 = 44.0;
+const WAVE_CLOCK_W: f32 = 26.0;
+const WAVE_CLOCK_LEAD: f32 = 12.0 + WAVE_CLOCK_W;
+const WAVE_MEDIA_W: f32 = 28.0;
+
 /// The readout over games: room for "999 fps", "GPU 100% · 100°" and
 /// "CPU 100%" with dividers (tabular digits keep it still as numbers
 /// change), and without the temperature when the driver reports none.
@@ -196,9 +203,12 @@ pub fn geom(m: &Mode, st: &AppState) -> Geom {
                     Some(ClockBadge::Low(_)) => 34.0,
                     None => 0.0,
                 };
-                Geom::new(base + badge, 30.0, 14.0)
+                let lead = if crate::wave::on(st.settings.theme) { WAVE_CLOCK_LEAD } else { 0.0 };
+                Geom::new(base + badge + lead, 30.0, 14.0)
             }
             IdleStyle::Minimal => Geom::new(150.0, 26.0, 12.0),
+            // A little taller than the eyes, for the crest.
+            IdleStyle::Eyes if crate::wave::on(st.settings.theme) => Geom::new(104.0, 36.0, 16.0),
             IdleStyle::Eyes => Geom::new(118.0, 30.0, 14.0),
             IdleStyle::Hidden => hidden_strip(),
         },
@@ -256,7 +266,8 @@ pub fn next_wake(m: &Mode, st: &AppState) -> Option<f64> {
             next = Some(next.map_or(t, |n: f64| n.min(t)));
         }
     };
-    if *m == Mode::Idle && st.settings.idle_style == IdleStyle::Eyes {
+    // The wave stands still, so the Light theme's eyes look needs no blinks.
+    if *m == Mode::Idle && st.settings.idle_style == IdleStyle::Eyes && !crate::wave::on(st.settings.theme) {
         let phase = now % BLINK_PERIOD;
         consider(if phase < BLINK_LEN { now - phase + BLINK_LEN } else { now - phase + BLINK_PERIOD });
     }
@@ -308,6 +319,13 @@ fn draw_idle(ui: &mut Ui, st: &mut AppState, body: Rect) {
     let cy = body.center().y;
     match st.settings.idle_style {
         IdleStyle::Clock | IdleStyle::Status => {
+            // Light theme: the wave on the left, the clock centred in the rest.
+            let body = if crate::wave::on(st.settings.theme) {
+                crate::wave::draw(ui.c, body.x + 11.0 + WAVE_CLOCK_W / 2.0, body.bottom() - 5.0, WAVE_CLOCK_W, body, st.now, false);
+                Rect::new(body.x + WAVE_CLOCK_LEAD, body.y, body.w - WAVE_CLOCK_LEAD, body.h)
+            } else {
+                body
+            };
             let time = fmt_clock(&st.local, st.settings.use_24h);
             let ts = TextStyle::body().weight(Weight::Semibold).tabular();
             let Some(badge) = clock_badge(st) else {
@@ -333,6 +351,9 @@ fn draw_idle(ui: &mut Ui, st: &mut AppState, body: Rect) {
                 ClockBadge::Low(_) => ui.c.text(&pct, Rect::new(x0, body.y, bw + 2.0, body.h), &pct_ts),
             }
             ui.c.text(&time, Rect::new(x0 + bw + BADGE_GAP, body.y, tw + 2.0, body.h), &ts);
+        }
+        IdleStyle::Eyes if crate::wave::on(st.settings.theme) => {
+            crate::wave::draw(ui.c, body.center().x, body.bottom() - 5.0, WAVE_IDLE_W, body, st.now, false);
         }
         IdleStyle::Eyes => {
             let blink = (st.now % BLINK_PERIOD) < BLINK_LEN;
@@ -420,7 +441,8 @@ fn draw_peek(ui: &mut Ui, st: &AppState, x0: f32, x1: f32, body: Rect, alpha: f3
     });
 }
 
-/// Music, collapsed: the album art on the left, the equalizer on the right, and between them a new track's title for a moment.
+/// Music, collapsed: the album art on the left, the equalizer (the wave, in
+/// the Light theme, swaying while it plays) on the right, and between them a new track's title for a moment.
 /// In the menu bar's line of a MacBook with a notch the camera takes the
 /// middle, so there it draws no words (`words` false).
 pub fn draw_music(ui: &mut Ui, st: &mut AppState, body: Rect, words: bool) {
@@ -430,7 +452,11 @@ pub fn draw_music(ui: &mut Ui, st: &mut AppState, body: Rect, words: bool) {
     art_or_icon(ui, st, art, playing);
     let eq = Rect::new(body.right() - 34.0, cy - 8.0, 20.0, 16.0);
     let alpha = if words { peek_alpha(st, body.w) } else { 0.0 };
-    equalizer(ui, eq, st.media_accent(), playing, st.now);
+    if crate::wave::on(st.settings.theme) {
+        crate::wave::draw(ui.c, body.right() - 26.0, body.bottom() - 5.0, WAVE_MEDIA_W, body, st.now, playing);
+    } else {
+        equalizer(ui, eq, st.media_accent(), playing, st.now);
+    }
     if alpha > 0.01 {
         draw_peek(ui, st, art.right() + 10.0, eq.x - 10.0, body, alpha);
     }
@@ -573,7 +599,7 @@ fn draw_hud(ui: &mut Ui, st: &mut AppState, body: Rect) {
             st.ui.hud_level = shown;
             ui.c.fill_rrect(bar, 3.0, palette::TRACK);
             if shown > 0.0 {
-                // Classic fills the level in white; a look with its own accent (Light's amber) in it.
+                // Classic fills the level in white; a look with its own accent (Light's blue) in it.
                 let level = match ui.c.look().accent {
                     Some(a) => a,
                     None => Color::white(0.95),

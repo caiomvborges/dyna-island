@@ -1,8 +1,8 @@
 """Draw Dyna Island's icon and installer pictures (Pillow).
 
-The icon is an amber rounded tile holding the island: a black pill with a
+The icon is a blue rounded tile holding the island: a black pill with a
 cream dot (the album art) and three cream bars (the equalizer). The installer
-pictures put the island, in amber, on the Light theme's cream ground.
+pictures put the island, in blue, on the Light theme's cream ground.
 
 Writes:
   crates/poni/res/poni.ico            16 to 256 px
@@ -21,12 +21,12 @@ RES = ROOT / "crates" / "poni" / "res"
 ART = ROOT / "installer" / "art"
 
 ISLAND = (0x08, 0x08, 0x0A)
-AMBER = (0xE8, 0x87, 0x3D)  # poni_core::look::LIGHT_ACCENT
+BLUE = (0x2E, 0x64, 0xA6)  # poni_core::look::LIGHT_ACCENT
 CREAM = (0xFB, 0xF4, 0xE9)  # the Light theme's ground
 SS = 4  # supersampling
 
 
-def island(d: ImageDraw.ImageDraw, x: float, y: float, w: float, h: float, mark=AMBER) -> None:
+def island(d: ImageDraw.ImageDraw, x: float, y: float, w: float, h: float, mark=BLUE) -> None:
     """The pill at (x, y), w by h, with its art dot and equalizer."""
     d.rounded_rectangle((x, y, x + w, y + h), radius=h / 2, fill=ISLAND)
     r = h * 0.30
@@ -46,7 +46,7 @@ def icon(size: int) -> Image.Image:
     im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     inset = s * 0.06
-    d.rounded_rectangle((inset, inset, s - inset, s - inset), radius=s * 0.22, fill=AMBER)
+    d.rounded_rectangle((inset, inset, s - inset, s - inset), radius=s * 0.22, fill=BLUE)
     w, h = s * 0.70, s * 0.27
     island(d, (s - w) / 2, (s - h) / 2, w, h, CREAM)
     return im.resize((size, size), Image.LANCZOS)

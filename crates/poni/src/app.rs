@@ -3152,7 +3152,7 @@ impl App {
     }
 }
 
-/// The Light theme's amber in that theme, Windows' accent colour otherwise.
+/// The Light theme's blue in that theme, Windows' accent colour otherwise.
 fn theme_accent(theme: Theme) -> Color {
     if theme == Theme::Light {
         Color::hex(poni_core::look::LIGHT_ACCENT)

@@ -62,6 +62,8 @@ mod ui;
 #[cfg(windows)]
 mod version;
 #[cfg(windows)]
+mod wave;
+#[cfg(windows)]
 mod window;
 
 #[cfg(windows)]

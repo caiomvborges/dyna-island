@@ -1,5 +1,7 @@
 # Dyna Island
 
+![Dyna Island no tema Light: a página Music aberta](docs/light-music.png)
+
 Uma ilha no topo da tela do Windows, como a Dynamic Island do celular: mostra o que está tocando, o timer de foco, volume, bateria e avisos, e abre em páginas quando o mouse passa por cima.
 
 É um derivado enxuto do Oyenza Studio (veja [Créditos](#créditos)), **só para Windows** e **local**: não baixa add-ons, não busca letras, não tem telemetria nem verificação de atualização. A única conexão com a internet é opcional: o add-on **Outlook agenda** lê o link de calendário que você colar, e só ele (veja a aba Agenda).
@@ -20,7 +22,18 @@ Uma ilha no topo da tela do Windows, como a Dynamic Island do celular: mostra o 
 | **Script** | Teleprompter sob a webcam, escondido de compartilhamentos de tela (add-on, desligado por padrão) |
 | **Add-ons** | Liga e desliga o Script reader e o Outlook agenda |
 
-A engrenagem no cabeçalho abre o **Settings** (tema Classic, Light, Glass ou Pill; aparência em repouso; sons; tela cheia; iniciar com o Windows).
+A engrenagem no cabeçalho abre o **Settings** (tema; aparência em repouso; sons; tela cheia; iniciar com o Windows).
+
+## Temas
+
+| Tema | Como é |
+|---|---|
+| **Classic** | A ilha preta, como a do celular, com a cor de destaque do Windows |
+| **Light** | Papel creme, tinta escura e destaque azul, com uma pequena onda inspirada em *A Grande Onda de Kanagawa*, de Hokusai: ao lado do relógio, no lugar dos olhos, no cabeçalho das páginas e no lugar do equalizador, onde balança enquanto a música toca |
+| **Glass** | Vidro líquido sobre o que está atrás da ilha |
+| **Pill** | Uma cápsula flutuando um pouco abaixo da borda da tela |
+
+![A ilha fechada no tema Light: relógio, olhos e música](docs/light-island.png)
 
 
 ## Compilar e rodar
@@ -64,7 +77,7 @@ O Dyna Island nasceu do **[Oyenza Studio](https://github.com/lucacadalora/oyenza
 O que mudou em relação ao original:
 
 - **Saiu:** Shelf e envio de arquivos pelo celular, Oyenza (dinheiro), Health, Prayer times, letras sincronizadas (LRCLIB e Apple Music), download de add-ons e o dicionário japonês, o gravador de tela, o app para Mac, o site e a publicação na loja.
-- **Saiu a marca:** o nome Oyenza Studio, o logo e o gato Oyen não fazem parte deste projeto. O tema Oyen virou o tema **Light** (creme e âmbar, sem o personagem), e o ícone e as imagens do instalador foram redesenhados (`tools/make_icon.py`).
+- **Saiu a marca:** o nome Oyenza Studio, o logo e o gato Oyen não fazem parte deste projeto. O tema Oyen virou o tema **Light**: creme e azul, com a onda no lugar do personagem (`crates/poni/src/wave.rs`). O ícone e as imagens do instalador foram redesenhados (`tools/make_icon.py`).
 - **Entrou:** as abas Dock, Notes e Agenda (link ICS do Outlook.com), o sino que avisa quando um processo termina e o atalho para o app que está tocando.
 
 Este projeto não é afiliado ao Oyenza Studio nem à Jatevo Labs.

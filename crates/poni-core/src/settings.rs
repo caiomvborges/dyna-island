@@ -27,7 +27,8 @@ pub enum Theme {
     /// The plain black island.
     #[default]
     Classic,
-    /// A light island: warm cream ground, dark ink and an amber accent.
+    /// A light island: warm cream ground, dark ink, a blue accent and a
+    /// small great wave (after Hokusai) where there is room for it.
     /// Settings files from before the name change say "oyen".
     #[serde(alias = "oyen")]
     Light,

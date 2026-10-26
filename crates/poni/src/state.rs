@@ -418,7 +418,7 @@ impl AppState {
     }
 
     /// Accent for media UI: art colour when available, else the system accent.
-    /// The Light theme keeps to its amber.
+    /// The Light theme keeps to its blue.
     pub fn media_accent(&self) -> Color {
         if self.settings.theme == poni_core::settings::Theme::Light {
             return self.accent;

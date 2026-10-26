@@ -21,7 +21,7 @@ mkdir -p "$ROOT/dist"
 cp "$EXE" "$ROOT/dist/dyna-island.exe"
 # Portable build inside its own folder, so dyna-island.exe never sits loose next to
 # other downloads (Windows looks for some DLLs in the exe's folder first).
-( cd "$ROOT/dist" && rm -rf DynaIsland "Dyna-Island-$VERSION-portable.zip" && mkdir DynaIsland && cp dyna-island.exe "$ROOT/THIRD-PARTY-NOTICES.txt" DynaIsland/ && zip -qr "Dyna-Island-$VERSION-portable.zip" Dyna Island && rm -rf DynaIsland )
+( cd "$ROOT/dist" && rm -rf DynaIsland "Dyna-Island-$VERSION-portable.zip" && mkdir DynaIsland && cp dyna-island.exe "$ROOT/THIRD-PARTY-NOTICES.txt" DynaIsland/ && zip -qr "Dyna-Island-$VERSION-portable.zip" DynaIsland && rm -rf DynaIsland )
 
 if [[ -n "${NSIS_HOST:-}" ]]; then
   REMOTE_DIR="dyna-pkg"

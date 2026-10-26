@@ -11,8 +11,12 @@
 //! the hollow.
 //!
 //! It breaks over and over: the body moves through five poses (calm, rising,
-//! curled, plunging, spent in foam) and back, eased between them, over
-//! [`CYCLE`] seconds, throwing spray as the lip comes down. Moving costs
+//! curled, plunging, spent in foam) and back over [`CYCLE`] seconds, throwing
+//! spray as the lip comes down. It never stops at a pose: each point runs
+//! along a smooth curve through all five (a cardinal spline in time), so it
+//! slows as it gathers and speeds up as it falls, the way water does. On top
+//! of that the crest leans forward as it builds, a swell keeps running along
+//! the water and the foam fizzes. Moving costs
 //! frames, so it only moves where the caller says (`moving`): in the music
 //! pill while something plays, and elsewhere unless battery saver is on;
 //! ambient frames already stop while the PC is locked or the display is off.
@@ -85,10 +89,17 @@ const POSES: [Pose; 5] = [CALM, RISING, CURLED, PLUNGING, SPENT];
 /// How much foam each pose carries.
 const FOAMY: [f32; 5] = [0.3, 0.5, 1.0, 1.4, 1.0];
 
-/// One break, in seconds, and when it reaches each pose: a moment calm,
-/// then it grows, curls, plunges, spends itself in foam and settles.
+/// One break, in seconds, and when it passes each pose: it grows slowly,
+/// curls, plunges quickly, spends itself in foam and settles into the next.
 pub const CYCLE: f64 = 3.2;
-const KEYS: [(f64, usize); 7] = [(0.0, 0), (0.4, 0), (1.2, 1), (1.7, 2), (2.15, 3), (2.7, 4), (CYCLE, 0)];
+const AT: [f64; 5] = [0.0, 1.05, 1.65, 2.1, 2.65];
+/// How far (box units) the crest leans forward at each pose; the feet stay.
+const LEAN: [f32; 5] = [0.0, 2.5, 4.0, 5.0, 2.0];
+/// A swell running along the water all the time: its height and length
+/// (box units) and period (seconds).
+const SWELL_H: f32 = 1.1;
+const SWELL_LEN: f64 = 48.0;
+const SWELL_T: f64 = 1.4;
 /// The spray thrown as the lip comes down: when it starts and how long it flies.
 const SPRAY_AT: f64 = 1.85;
 const SPRAY_LIFE: f64 = 1.0;
@@ -111,27 +122,61 @@ pub fn height(w: f32) -> f32 {
     w * BOX_H / BOX_W
 }
 
-fn smooth(x: f64) -> f64 {
-    let v = x.clamp(0.0, 1.0);
-    v * v * (3.0 - 2.0 * v)
+/// Where a time falls between two poses: the pose before it and the cubic
+/// Hermite weights for (value before, slope before, value after, slope
+/// after), the slopes already scaled to the span.
+struct Span {
+    i: usize,
+    w: [f32; 4],
 }
 
-/// The body and its foam at `t` seconds into a break.
-fn pose_at(t: f64) -> (Pose, f32) {
+/// The time of the `i`-th pose counted from the start of this break (`i`
+/// may run past either end: the poses repeat every [`CYCLE`]).
+fn time_of(i: i64) -> f64 {
+    AT[i.rem_euclid(5) as usize] + CYCLE * i.div_euclid(5) as f64
+}
+
+fn span(t: f64) -> Span {
     let t = t.rem_euclid(CYCLE);
-    for w in KEYS.windows(2) {
-        let ((t0, a), (t1, b)) = (w[0], w[1]);
-        if t <= t1 {
-            let u = if t1 > t0 { smooth((t - t0) / (t1 - t0)) as f32 } else { 0.0 };
-            let mut p = POSES[a];
-            for (q, r) in p.iter_mut().zip(POSES[b]) {
-                q.0 += (r.0 - q.0) * u;
-                q.1 += (r.1 - q.1) * u;
-            }
-            return (p, FOAMY[a] + (FOAMY[b] - FOAMY[a]) * u);
-        }
+    let i = AT.iter().rposition(|&a| a <= t).unwrap_or(0);
+    let (t0, t1) = (time_of(i as i64), time_of(i as i64 + 1));
+    let h = t1 - t0;
+    let u = ((t - t0) / h) as f32;
+    let (u2, u3) = (u * u, u * u * u);
+    Span { i, w: [2.0 * u3 - 3.0 * u2 + 1.0, (u3 - 2.0 * u2 + u) * h as f32, -2.0 * u3 + 3.0 * u2, (u3 - u2) * h as f32] }
+}
+
+/// One value through the five poses' `vals`: Catmull-Rom slopes (the
+/// neighbours' difference over their time apart), so it never halts.
+fn through(sp: &Span, vals: impl Fn(usize) -> f32) -> f32 {
+    let at = |k: i64| vals(k.rem_euclid(5) as usize);
+    let i = sp.i as i64;
+    let slope = |k: i64| (at(k + 1) - at(k - 1)) / (time_of(k + 1) - time_of(k - 1)) as f32;
+    sp.w[0] * at(i) + sp.w[1] * slope(i) + sp.w[2] * at(i + 1) + sp.w[3] * slope(i + 1)
+}
+
+/// The body, its foam and the crest's lean at `t` seconds into a break.
+fn pose_at(t: f64) -> (Pose, f32, f32) {
+    let sp = span(t);
+    let mut p = CALM;
+    for (j, q) in p.iter_mut().enumerate() {
+        q.0 = through(&sp, |k| POSES[k][j].0).clamp(0.0, BOX_W);
+        q.1 = through(&sp, |k| POSES[k][j].1).clamp(0.0, BOX_H);
     }
-    (POSES[0], FOAMY[0])
+    (p, through(&sp, |k| FOAMY[k]).max(0.2), through(&sp, |k| LEAN[k]))
+}
+
+/// The pose with the crest leaning `lean` forward and the swell at `t`
+/// running along it; the feet stay put.
+fn swell(p: &Pose, lean: f32, t: f64) -> Pose {
+    let mut out = *p;
+    for q in out.iter_mut() {
+        let up = (BOX_H - q.1) / BOX_H;
+        let wave = (std::f64::consts::TAU * (q.0 as f64 / SWELL_LEN - t / SWELL_T)).sin() as f32;
+        q.0 = (q.0 + lean * up).min(BOX_W);
+        q.1 = (q.1 - SWELL_H * wave * up.sqrt()).clamp(0.0, BOX_H);
+    }
+    out
 }
 
 /// The body's `i`-th curve: start, two controls, end.
@@ -146,14 +191,17 @@ fn bezier(c: [(f32, f32); 4], t: f32) -> (f32, f32) {
 }
 
 /// Foam along the body: (centre, radius) in box units. Small on the back of
-/// the top, full along the top, thinning into claws down the lip.
-fn foam(p: &Pose, amount: f32) -> Vec<((f32, f32), f32)> {
+/// the top, full along the top, thinning into claws down the lip. With
+/// `fizz` (the time, while it moves) each bubble swells and shrinks a little,
+/// out of step with the others.
+fn foam(p: &Pose, amount: f32, fizz: Option<f64>) -> Vec<((f32, f32), f32)> {
     let mut out = Vec::with_capacity(17);
     for (i, t0, t1, n, r0, r1) in [(1, 0.5, 1.0, 5, 1.6, 2.4), (2, 0.0, 1.0, 8, 2.4, 2.6), (3, 0.0, 0.75, 4, 2.4, 1.0)] {
         let c = curve(p, i);
         for k in 0..n {
             let u = k as f32 / (n - 1) as f32;
-            out.push((bezier(c, t0 + (t1 - t0) * u), (r0 + (r1 - r0) * u) * amount));
+            let jiggle = fizz.map_or(1.0, |t| 1.0 + 0.12 * (t * 7.0 + (i * 8 + k) as f64 * 1.9).sin() as f32);
+            out.push((bezier(c, t0 + (t1 - t0) * u), (r0 + (r1 - r0) * u) * amount * jiggle));
         }
     }
     out
@@ -212,7 +260,12 @@ fn polygon(pts: &[(f32, f32)], map: &impl Fn(f32, f32) -> (f32, f32)) -> Vec<Seg
 pub fn draw(c: &mut Canvas, cx: f32, base_y: f32, w: f32, clip: Rect, now: f64, moving: bool) {
     let k = w / BOX_W;
     let map = |x: f32, y: f32| (cx + (x - BOX_W / 2.0) * k, base_y + (y - BOX_H) * k);
-    let (p, amount) = if moving { pose_at(now) } else { (CURLED, 1.0) };
+    let (p, amount) = if moving {
+        let (p, amount, lean) = pose_at(now);
+        (swell(&p, lean, now), amount)
+    } else {
+        (CURLED, 1.0)
+    };
     let rim = (0.7 * k).max(0.5);
     c.clip(clip);
     c.unthemed(|c| {
@@ -225,7 +278,7 @@ pub fn draw(c: &mut Canvas, cx: f32, base_y: f32, w: f32, clip: Rect, now: f64, 
         c.path(&body(&p, BAND_PALE, &map), Some(PALE), None);
         // Foam: every bubble's blue rim first, then the white over them,
         // so only the outer edge of the crest shows a line.
-        let dots = foam(&p, amount);
+        let dots = foam(&p, amount, moving.then_some(now));
         for &((x, y), r) in &dots {
             let (px, py) = map(x, y);
             c.fill_circle(Point::new(px, py), r * k + rim, DEEP);
@@ -265,12 +318,26 @@ mod tests {
     #[test]
     fn it_breaks_and_comes_back() {
         // Calm at the start, the print's pose mid-way, calm again at the end.
-        assert_eq!(pose_at(0.0).0, CALM);
-        assert_eq!(pose_at(1.7).0, CURLED);
-        assert_eq!(pose_at(2.15).0, PLUNGING);
-        assert_eq!(pose_at(CYCLE - 1e-9).0, pose_at(0.0).0);
+        // It passes through every pose exactly, at its time.
+        for (k, pose) in POSES.iter().enumerate() {
+            assert_eq!(&pose_at(AT[k]).0, pose, "pose {k}");
+        }
+        // The end of one break runs into the start of the next.
+        let (a, b) = (pose_at(CYCLE - 1e-6).0, pose_at(0.0).0);
+        for (p, q) in a.iter().zip(b) {
+            assert!((p.0 - q.0).abs() < 0.01 && (p.1 - q.1).abs() < 0.01);
+        }
         // The top is highest while curled, lowest while calm.
-        assert!(pose_at(1.7).0[6].1 < pose_at(0.2).0[6].1);
+        assert!(pose_at(AT[2]).0[6].1 < pose_at(0.2).0[6].1);
+    }
+
+    #[test]
+    fn it_never_stops_between_poses() {
+        // The crest's top keeps moving through each pose (no easing to a halt).
+        for &t in &AT[1..4] {
+            let (a, b) = (pose_at(t - 0.02).0[6], pose_at(t + 0.02).0[6]);
+            assert!((a.0 - b.0).abs() + (a.1 - b.1).abs() > 0.05, "stops at {t}");
+        }
     }
 
     #[test]

@@ -31,6 +31,7 @@ use std::sync::mpsc::{self, Receiver};
 use windows::core::{w, Result};
 use windows::Foundation::Numerics::Matrix3x2;
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::System::Ole::{OleInitialize, OleUninitialize};
 use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
@@ -335,6 +336,9 @@ pub struct App {
     prev_canvas_px: Option<RECT>,
     /// GPU renderer: the hit mask last pushed to the window, and when.
     mask: Option<(HitMask, f64)>,
+    /// The window region last set (window pixels): the canvas while the
+    /// island rests, none while it moves (see [`App::clip_window`]).
+    region: Option<RECT>,
     /// Smoothness of the morph in progress (logged when it settles).
     motion: Option<MotionStats>,
     motion_name: &'static str,
@@ -556,6 +560,7 @@ impl App {
             surface: Surface::default(),
             cx: 0.0,
             prev_canvas_px: None,
+            region: None,
             mask: None,
             motion: None,
             motion_name: "morph",
@@ -731,6 +736,7 @@ impl App {
             self.cx = w as f32 / 2.0 / s;
             self.prev_canvas_px = None;
             self.mask = None;
+            self.set_region(None);
             if let Err(e) = self.gfx.set_surface(w, h) {
                 pwarn!("window surface {w}x{h} failed: {e}");
             }
@@ -2429,6 +2435,7 @@ impl App {
         let full = RECT { left: 0, top: 0, right: sw, bottom: sh };
         let dirty = px_union(self.prev_canvas_px.unwrap_or(full), canvas_px);
         self.prev_canvas_px = Some(canvas_px);
+        self.clip_window(canvas_px);
         if std::mem::take(&mut self.capture_next) {
             self.capture_rect = px_rect(canvas_r, scale, 0, sw, sh);
             self.gfx.request_capture(self.capture_rect);
@@ -2681,6 +2688,34 @@ impl App {
             let lines = std::mem::take(&mut self.log_queue);
             std::thread::spawn(move || lines.iter().for_each(|l| crate::plog::write("INFO", l)));
         }
+    }
+
+    /// Cut the window down to what the island draws while it rests. Apps
+    /// built on WinUI and XAML (File Explorer's address bar, Windows 11's
+    /// context menu) take no clicks under any part of a layered window, even
+    /// where it is fully transparent; outside its region the window is not
+    /// there at all. A moving island grows from one frame to the next, so
+    /// the window is whole again until it settles.
+    fn clip_window(&mut self, canvas_px: RECT) {
+        let want = self.island.settled().then_some(canvas_px);
+        if want != self.region {
+            self.set_region(want);
+        }
+    }
+
+    fn set_region(&mut self, r: Option<RECT>) {
+        unsafe {
+            let rgn = r.map(|r| CreateRectRgn(r.left, r.top, r.right, r.bottom));
+            // Windows owns the region once it took it.
+            if SetWindowRgn(self.hwnd, rgn.unwrap_or_default(), false) == 0 {
+                if let Some(rgn) = rgn {
+                    let _ = DeleteObject(rgn);
+                }
+                pwarn!("window region failed");
+                return;
+            }
+        }
+        self.region = r;
     }
 
     /// GPU renderer: keep the window's invisible hit mask on the island.

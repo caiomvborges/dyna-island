@@ -45,8 +45,8 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId,
     GetDesktopWindow, GetShellWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed, CHILDID_SELF, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE,
-    EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, GW_HWNDPREV, OBJID_WINDOW,
-    WINEVENT_OUTOFCONTEXT, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_THICKFRAME,
+    EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER,
+    OBJID_WINDOW, WINEVENT_OUTOFCONTEXT, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP, WS_THICKFRAME,
 };
 
 /// Desktop and shell surfaces that cover a whole monitor without being a
@@ -65,11 +65,14 @@ const SHELL_CLASSES: [&str; 8] = [
 ];
 
 /// Pop-ups that may sit above the island: menus, tooltips and the shell's
-/// flyouts (Start and Search, the tray overflow, taskbar thumbnails).
-const POPUP_CLASSES: [&str; 7] = [
+/// flyouts (Start and Search, the tray overflow, taskbar thumbnails), and
+/// Windows 11's own context menu (a WinUI 3 pop-up in File Explorer and on
+/// the desktop). Other pop-ups are told by their style ([`is_transient`]).
+const POPUP_CLASSES: [&str; 8] = [
     "#32768",
     "tooltips_class32",
     "Xaml_WindowedPopupClass",
+    "Microsoft.UI.Content.PopupWindowSiteBridge",
     "Windows.UI.Core.CoreWindow",
     "TaskListThumbnailWnd",
     "NotifyIconOverflowWindow",
@@ -621,7 +624,8 @@ pub fn fullscreen_pid() -> Option<u32> {
 /// The class of the first window above the island in the z-order that
 /// overlaps it: visible, not cloaked, not ours, and not a pop-up or a shell
 /// surface (those may cover the island for a moment). `None` when the island
-/// is on top.
+/// is on top. Raising the island over an open menu put it between the menu
+/// and the pointer, and the menu stopped taking clicks under its window.
 pub fn window_above(island: HWND) -> Option<String> {
     let mut r = RECT::default();
     unsafe { GetWindowRect(island, &mut r) }.ok()?;
@@ -650,6 +654,11 @@ pub fn window_above(island: HWND) -> Option<String> {
         }
         let class = class_name(hwnd);
         if SHELL_CLASSES.contains(&class.as_str()) || POPUP_CLASSES.contains(&class.as_str()) {
+            continue;
+        }
+        let (style, ex) = unsafe { (GetWindowLongW(hwnd, GWL_STYLE) as u32, GetWindowLongW(hwnd, GWL_EXSTYLE) as u32) };
+        let owned = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok_and(|o| !o.is_invalid());
+        if is_transient(style, ex, owned) {
             continue;
         }
         return Some(class);
@@ -753,6 +762,15 @@ fn at_top(w: &Watch, hwnd: HWND, band: &RECT) -> Option<[i32; 4]> {
 /// hover cards). Some stay visible across the whole screen all day.
 fn is_overlay(ex: u32) -> bool {
     ex & (WS_EX_TRANSPARENT.0 | WS_EX_NOACTIVATE.0) != 0 || (ex & WS_EX_TOOLWINDOW.0 != 0 && ex & WS_EX_APPWINDOW.0 == 0)
+}
+
+/// Styles of a pop-up that opens over others for a moment and closes on the
+/// next click: a menu, a drop-down list, a flyout, a hover card. A frameless
+/// pop-up that belongs to another window or has no taskbar button. A
+/// borderless game or an "always on top" app window has neither.
+fn is_transient(style: u32, ex: u32, owned: bool) -> bool {
+    let popup = style & WS_POPUP.0 != 0 && style & WS_CAPTION.0 != WS_CAPTION.0;
+    popup && (owned || (ex & WS_EX_TOOLWINDOW.0 != 0 && ex & WS_EX_APPWINDOW.0 == 0))
 }
 
 /// `r` cut to `band` as (left, top, right, bottom); None when they don't meet.
@@ -861,6 +879,19 @@ mod tests {
         for ex in [WS_EX_TRANSPARENT, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT] {
             assert!(is_overlay(ex.0), "{:#x}", ex.0);
         }
+    }
+
+    #[test]
+    fn menus_and_flyouts_are_transient() {
+        let popup = WS_POPUP.0;
+        // A context menu or a drop-down list: owned, or a tool window.
+        assert!(is_transient(popup, 0, true));
+        assert!(is_transient(popup, WS_EX_TOOLWINDOW.0, false));
+        // A borderless game, or an app window that stays on top.
+        assert!(!is_transient(popup, 0, false));
+        assert!(!is_transient(popup, (WS_EX_TOOLWINDOW | WS_EX_APPWINDOW).0, false));
+        assert!(!is_transient(WS_CAPTION.0 | WS_THICKFRAME.0, WS_EX_TOOLWINDOW.0, true));
+        assert!(!is_transient(popup | WS_CAPTION.0, 0, true));
     }
 
     #[test]

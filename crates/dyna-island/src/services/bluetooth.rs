@@ -61,7 +61,6 @@ const PKEY_LE_CATEGORY: &str = "System.Devices.Aep.Bluetooth.Le.Appearance.Categ
 /// device (earbuds / headsets / headphones), hearing aid.
 const LE_AUDIO_CATEGORIES: [u32; 6] = [0x0A, 0x21, 0x22, 0x25, 0x27, 0x29];
 
-const FALLBACK_NAME: &str = "Bluetooth device";
 
 /// Bluetooth connect/disconnect watcher. Dropping it stops the watchers.
 pub struct BluetoothService {
@@ -627,9 +626,18 @@ impl Worker {
         }
     }
 
-    /// Look up details (bounded) and send the pop-up event.
+    /// Look up details (bounded) and send the pop-up event. A device without
+    /// a name gets no pop-up: Windows links to nearby phones, watches and
+    /// beacons over LE for a second or two, often every minute, and none of
+    /// them is a device the person connected.
     fn report(&mut self, key: &str, connected: bool, at: Instant) {
-        let Some(dev) = self.devices.get(key) else { return };
+        let Some(dev) = self.devices.get_mut(key) else { return };
+        if dev.name.is_empty() {
+            dev.shown = Some(connected);
+            dev.shown_at = Some(at);
+            crate::pinfo!("bluetooth: unnamed device {}; no pop-up", if connected { "connected" } else { "disconnected" });
+            return;
+        }
         let snap = Snapshot { container: dev.container, endpoints: dev.endpoints.clone(), audio: dev.audio };
         let (audio, battery) = describe(&snap, connected);
 
@@ -639,7 +647,7 @@ impl Worker {
         }
         dev.shown = Some(connected);
         dev.shown_at = Some(at);
-        let name = if dev.name.is_empty() { FALLBACK_NAME.to_string() } else { dev.name.clone() };
+        let name = dev.name.clone();
         let audio = audio.unwrap_or(false);
         crate::pinfo!(
             "bluetooth: device {} (audio {audio}, battery {})",

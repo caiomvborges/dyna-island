@@ -1,8 +1,9 @@
 //! Bluetooth connect/disconnect pop-ups with battery level.
 //!
 //! Two WinRT `DeviceWatcher`s (classic and LE association endpoints, filtered
-//! to connected devices) feed one worker thread. The watcher handlers run on
-//! the thread pool and only copy a few properties into a message. The worker:
+//! to connected, paired devices) feed one worker thread. The watcher handlers
+//! run on the thread pool and only copy a few properties into a message. The
+//! worker:
 //!
 //! * records the devices found during the initial enumeration silently
 //!   (already-connected devices are not news),
@@ -53,6 +54,7 @@ const RESTART_DELAY: Duration = Duration::from_secs(5);
 const PKEY_BATTERY: &str = "{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2";
 const PKEY_CONTAINER: &str = "System.Devices.Aep.ContainerId";
 const PKEY_CONNECTED: &str = "System.Devices.Aep.IsConnected";
+const PKEY_PAIRED: &str = "System.Devices.Aep.IsPaired";
 const PKEY_COD_MAJOR: &str = "System.Devices.Aep.Bluetooth.Cod.Major";
 const PKEY_LE_CATEGORY: &str = "System.Devices.Aep.Bluetooth.Le.Appearance.Category";
 
@@ -126,11 +128,15 @@ impl Kind {
         }
     }
 
+    /// Connected devices paired with this PC. Windows also links to devices
+    /// nobody paired, for a second or two (a stranger's iPhone in the next
+    /// office, a beacon), and those are no news to the person here.
     fn selector(self) -> Result<HSTRING> {
-        match self {
-            Kind::Classic => BluetoothDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected),
-            Kind::Le => BluetoothLEDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected),
-        }
+        let connected = match self {
+            Kind::Classic => BluetoothDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected)?,
+            Kind::Le => BluetoothLEDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected)?,
+        };
+        Ok(HSTRING::from(format!("{connected} AND {PKEY_PAIRED}:=System.StructuredQueryType.Boolean#True")))
     }
 
     /// The property that hints whether the device is audio gear.
@@ -627,9 +633,7 @@ impl Worker {
     }
 
     /// Look up details (bounded) and send the pop-up event. A device without
-    /// a name gets no pop-up: Windows links to nearby phones, watches and
-    /// beacons over LE for a second or two, often every minute, and none of
-    /// them is a device the person connected.
+    /// a name gets no pop-up: it is no device the person would know.
     fn report(&mut self, key: &str, connected: bool, at: Instant) {
         let Some(dev) = self.devices.get_mut(key) else { return };
         if dev.name.is_empty() {

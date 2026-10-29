@@ -12,7 +12,7 @@ Target amd64-unicode
 SetCompressor /SOLID lzma
 
 !define APPNAME "Dyna Island"
-!define VERSION "0.3.0"
+!define VERSION "0.3.1"
 !define PUBLISHER "Dyna Island"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynaIsland"
 !define RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
@@ -31,7 +31,7 @@ InstallDir "$LOCALAPPDATA\Programs\DynaIsland"
 InstallDirRegKey HKCU "Software\DynaIsland" "InstallDir"
 BrandingText "${APPNAME} ${VERSION}"
 
-VIProductVersion "0.3.0.0"
+VIProductVersion "0.3.1.0"
 VIAddVersionKey "ProductName" "${APPNAME}"
 VIAddVersionKey "CompanyName" "${PUBLISHER}"
 VIAddVersionKey "FileDescription" "Dyna Island installer"
